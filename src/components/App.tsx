@@ -1072,7 +1072,7 @@ const App: React.FC = () => {
 
   return (
     <div className="container mx-auto p-4 md:p-6 max-w-4xl">
-      <h1 className="text-2xl font-bold mb-6 text-gray-800">AI HTML to SVG Generator</h1>
+      <h1 className="text-2xl font-bold mb-6 text-gray-800">GG - AI Generator</h1>
       
       {/* メインタブUI */}
       <div className="mb-6">

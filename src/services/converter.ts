@@ -24,7 +24,7 @@ export async function convertHtmlToSvg(
     container.style.height = typeof height === 'number' ? `${height}px` : height;
   }
   
-  container.style.maxWidth = '1200px';
+  container.style.maxWidth = '1920px';
   container.style.fontFamily = 'sans-serif';
   document.body.appendChild(container);
   

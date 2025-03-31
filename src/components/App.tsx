@@ -1,5 +1,5 @@
 import * as React from 'react';
-import PromptInput, { TemplateType } from './PromptInput';
+import PromptInput, { TemplateType, PromptItem } from './PromptInput';
 import SelectionPreview from './SelectionPreview';
 import TokenDisplay from './TokenDisplay';
 import SVGPreview from './SVGPreview';
@@ -7,6 +7,7 @@ import ProgressIndicator from './ProgressIndicator';
 import { callAIAPI, DEFAULT_MODELS, generateImageWithGemini } from '../services/gemini';
 import { convertHtmlToSvg } from '../services/converter';
 import { DesignTokens, SelectionInfo } from '../utils/types';
+import JSZip from 'jszip';
 
 // メインタブの状態型を拡張
 type MainTabType = 'generation' | 'tokens' | 'settings' | 'image-generation';
@@ -62,6 +63,20 @@ const App: React.FC = () => {
   
   // 実際に使用するモデルID (カスタムか標準か)
   const actualModelId = showCustomModelInput ? customModelId : selectedModelId;
+  
+  // 一括生成のための状態変数
+  const [promptItems, setPromptItems] = React.useState<PromptItem[]>([]);
+  const [isBatchMode, setIsBatchMode] = React.useState(false);
+  const [currentBatchIndex, setCurrentBatchIndex] = React.useState(0);
+  const [isBatchGenerating, setIsBatchGenerating] = React.useState(false);
+  const [generatedItems, setGeneratedItems] = React.useState<Array<{
+    id: string;
+    html: string;
+    svg: string;
+    width: number;
+    height: number;
+  }>>([]);
+  const [lastInsertedNodeId, setLastInsertedNodeId] = React.useState<string | null>(null);
   
   // 選択要素からサイズ情報を取得する関数
   const getSelectionSize = (selectionItems: SelectionInfo[]): { width: string, height: string } | null => {
@@ -125,6 +140,24 @@ const App: React.FC = () => {
       }
     }
   }, [selection, isLoading, autoSizeEnabled]);
+
+  // 一括生成中に次のプロンプトを処理する
+  React.useEffect(() => {
+    if (isBatchGenerating && currentBatchIndex < promptItems.length) {
+      // 少し遅延を入れて処理を開始（UIの更新や挿入操作の完了を待つ）
+      const timer = setTimeout(() => {
+        handleBatchGenerate();
+      }, 500);
+      
+      return () => clearTimeout(timer);
+    } else if (isBatchGenerating && currentBatchIndex >= promptItems.length) {
+      // 全ての項目が生成完了したとき
+      setIsBatchGenerating(false);
+      setCurrentBatchIndex(0);
+      setProgress({ stage: '一括生成完了', percentage: 100 });
+      setTimeout(() => setIsLoading(false), 1000);
+    }
+  }, [isBatchGenerating, currentBatchIndex, promptItems.length, lastInsertedNodeId]);
   
   // 設定変更時に保存する
   React.useEffect(() => {
@@ -174,11 +207,21 @@ const App: React.FC = () => {
         setDesignTokens(message.designTokens);
       } else if (message.type === 'svg-inserted') {
         if (message.success) {
-          setProgress({ stage: 'SVG挿入完了', percentage: 100 });
-          setTimeout(() => setIsLoading(false), 1000);
+          if (isBatchGenerating) {
+            // 一括生成モードの場合、次の項目に進む
+            setLastInsertedNodeId(message.nodeId || null);
+            setCurrentBatchIndex(prevIndex => prevIndex + 1);
+          } else {
+            // 通常モードの場合、完了メッセージを表示
+            setProgress({ stage: 'SVG挿入完了', percentage: 100 });
+            setTimeout(() => setIsLoading(false), 1000);
+          }
         } else {
           setError(`SVG挿入エラー: ${message.error}`);
           setIsLoading(false);
+          if (isBatchGenerating) {
+            setIsBatchGenerating(false);
+          }
         }
       } else if (message.type === 'image-inserted') {
         if (message.success) {
@@ -208,7 +251,7 @@ const App: React.FC = () => {
         generateBasePromptFromPageData(message.pageData);
       }
     };
-  }, [apiKey, actualModelId, designTokens]); // 依存配列に必要な変数を追加
+  }, [apiKey, actualModelId, designTokens, isBatchGenerating, currentBatchIndex, promptItems.length]); // 依存配列に必要な変数を追加
 
   // APIキー変更時の処理
   const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -459,6 +502,196 @@ const App: React.FC = () => {
     }
   };
 
+  // 生成データを個別にダウンロードする関数
+  const downloadFile = (content: string, fileName: string, contentType: string) => {
+    // Blobオブジェクトを作成
+    const blob = new Blob([content], { type: contentType });
+    // オブジェクトURLを作成
+    const url = URL.createObjectURL(blob);
+    
+    // aタグを作成してダウンロードリンクとして使用
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    
+    // オブジェクトURLを解放
+    URL.revokeObjectURL(url);
+  };
+  
+  // 一括生成データをZIPファイルとしてダウンロードする関数
+  const handleDownloadAllAsZip = async () => {
+    try {
+      if (generatedItems.length === 0) {
+        setError('ダウンロードするデータがありません');
+        return;
+      }
+      
+      // JSZipインスタンス作成
+      const zip = new JSZip();
+      
+      // 各生成アイテムをZIPに追加
+      generatedItems.forEach((item, index) => {
+        // プロンプトアイテムを検索して、そのタイトルを取得
+        const promptItem = promptItems.find(p => p.id === item.id);
+        const title = promptItem?.title || `画面${index + 1}`;
+        const safeTitle = title.replace(/[^\w\s]/gi, '_'); // ファイル名に使えない文字を置換
+        
+        // SVGファイルを追加
+        zip.file(`${safeTitle}.svg`, item.svg);
+        
+        // HTMLファイルを追加
+        zip.file(`${safeTitle}.html`, item.html);
+      });
+      
+      // ZIPを生成してダウンロード
+      const content = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(content);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `generated-content-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      
+      // オブジェクトURLを解放
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(`ZIP生成エラー: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // 一括生成の開始処理
+  const handleStartBatchGeneration = () => {
+    if (!apiKey) {
+      setError('APIキーが設定されていません');
+      return;
+    }
+    
+    if (promptItems.length === 0) {
+      setError('プロンプトが設定されていません');
+      return;
+    }
+    
+    if (showCustomModelInput && !customModelId) {
+      setError('カスタムモデルIDを入力してください');
+      return;
+    }
+    
+    // 生成開始
+    setIsLoading(true);
+    setError('');
+    setHtmlResult('');
+    setSvgResult('');
+    setSvgSize({ width: 0, height: 0 });
+    setGeneratedItems([]);
+    setCurrentBatchIndex(0);
+    setIsBatchGenerating(true);
+    
+    // 最初のプロンプトの生成は自動的に開始される（useEffect内）
+  };
+  
+  // バッチ内の次のプロンプトを生成する処理
+  const handleBatchGenerate = async () => {
+    if (currentBatchIndex >= promptItems.length) {
+      // 全ての項目が処理済みの場合は終了
+      setIsBatchGenerating(false);
+      setProgress({ stage: '一括生成完了', percentage: 100 });
+      setTimeout(() => setIsLoading(false), 1000);
+      return;
+    }
+    
+    const currentItem = promptItems[currentBatchIndex];
+    
+    try {
+      // プログレス更新
+      setProgress({ 
+        stage: `${currentItem.title} (${currentBatchIndex + 1}/${promptItems.length}) 生成中...`, 
+        percentage: Math.round((currentBatchIndex / promptItems.length) * 100) 
+      });
+      
+      // 過去に生成したアイテムを参照するためのコンテキスト情報を構築
+      let contextInfo = '';
+      if (generatedItems.length > 0) {
+        contextInfo = `
+        これまでに生成した画面情報:
+        ${generatedItems.map((item, idx) => {
+          const prompt = promptItems.find(p => p.id === item.id);
+          return `画面${idx + 1}: ${prompt?.title || 'タイトルなし'} - ${prompt?.content || '詳細なし'}`;
+        }).join('\n')}
+        
+        上記の画面と一貫性のあるデザインで、以下の画面を作成してください。
+        `;
+      }
+      
+      // AIモデルによるHTML生成（ベースプロンプト + コンテキスト情報 + 現在のプロンプト）
+      const finalPrompt = basePrompt 
+        ? `${basePrompt}\n\n${contextInfo}\n\n${currentItem.content}` 
+        : `${contextInfo}\n\n${currentItem.content}`;
+      
+      const htmlContent = await callAIAPI(
+        apiKey, 
+        actualModelId, 
+        designTokens, 
+        finalPrompt,
+        selection,
+        templateType
+      );
+      
+      // 幅と高さの処理
+      const widthParam = generateWidth === 'auto' ? undefined : generateWidth;
+      const heightParam = generateHeight === 'auto' ? undefined : generateHeight;
+      
+      // HTMLをSVGに変換
+      const svgResult = await convertHtmlToSvg(
+        htmlContent, 
+        designTokens,
+        widthParam,
+        heightParam
+      );
+      
+      // 生成結果を保存
+      setGeneratedItems(prev => [
+        ...prev, 
+        {
+          id: currentItem.id,
+          html: htmlContent,
+          svg: svgResult.svg,
+          width: svgResult.width,
+          height: svgResult.height
+        }
+      ]);
+      
+      // 最新の生成結果を表示用に設定
+      setHtmlResult(htmlContent);
+      setSvgResult(svgResult.svg);
+      setSvgSize({ width: svgResult.width, height: svgResult.height });
+      
+      // Figmaに挿入リクエスト（SVGとサイズ情報、一括生成フラグも一緒に送信）
+      parent.postMessage(
+        { 
+          pluginMessage: { 
+            type: 'insert-svg', 
+            svg: svgResult.svg,
+            width: svgResult.width,
+            height: svgResult.height,
+            isBatchGeneration: true,
+            batchItemTitle: currentItem.title,
+            batchIndex: currentBatchIndex,
+            batchTotal: promptItems.length
+          } 
+        },
+        '*'
+      );
+      
+      // 注: 次のプロンプトへの移行はFigmaからの挿入完了メッセージ受信時に行う
+      
+    } catch (err) {
+      setError(`エラー (${currentItem.title}): ${err instanceof Error ? err.message : String(err)}`);
+      setIsBatchGenerating(false);
+      setIsLoading(false);
+    }
+  };
+
   // 使用中のモデルプロバイダー名を取得
   const getCurrentProviderName = () => {
     if (showCustomModelInput) {
@@ -583,9 +816,74 @@ const App: React.FC = () => {
             onGenerate={handleGenerate}
             disabled={isLoading}
             templateType={templateType}
-            onTemplateTypeChange={handleTemplateTypeChange}
+            onTemplateTypeChange={setTemplateType}
+            promptItems={promptItems}
+            onPromptItemsChange={setPromptItems}
+            onBatchGenerate={handleStartBatchGeneration}
+            isBatchMode={isBatchMode}
+            onBatchModeChange={setIsBatchMode}
           />
         </div>
+        
+        {/* バッチ生成情報表示 */}
+        {isBatchGenerating && (
+          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
+            <h3 className="text-base font-medium text-gray-800 mb-2">一括生成状況</h3>
+            <div className="flex items-center justify-between text-sm text-gray-700 mb-1">
+              <span>現在の処理:</span>
+              <span>{promptItems[currentBatchIndex]?.title || '処理中...'}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm text-gray-700">
+              <span>進捗状況:</span>
+              <span>{currentBatchIndex} / {promptItems.length} 完了</span>
+            </div>
+          </div>
+        )}
+        
+        {/* 一括生成結果ダウンロード */}
+        {!isBatchGenerating && generatedItems.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-medium text-gray-800">一括生成結果</h3>
+              <button
+                onClick={handleDownloadAllAsZip}
+                className="px-3 py-1.5 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 rounded transition-colors flex items-center gap-1"
+              >
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                  <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+                <span>すべてZIPでダウンロード</span>
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mt-1">
+              生成されたファイル: {generatedItems.length}件
+            </p>
+            <ul className="mt-2 space-y-1 text-xs text-gray-500 max-h-32 overflow-y-auto">
+              {generatedItems.map((item, index) => {
+                const promptItem = promptItems.find(p => p.id === item.id);
+                return (
+                  <li key={item.id} className="flex justify-between">
+                    <span>{promptItem?.title || `画面${index + 1}`}</span>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => downloadFile(item.svg, `${promptItem?.title || `screen-${index + 1}`}.svg`, 'image/svg+xml')}
+                        className="text-blue-500 hover:text-blue-700"
+                      >
+                        SVG
+                      </button>
+                      <button
+                        onClick={() => downloadFile(item.html, `${promptItem?.title || `screen-${index + 1}`}.html`, 'text/html')}
+                        className="text-green-500 hover:text-green-700"
+                      >
+                        HTML
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
         
         {/* 進捗表示 */}
         {isLoading && (

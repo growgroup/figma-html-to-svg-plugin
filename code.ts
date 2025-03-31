@@ -566,6 +566,13 @@ figma.ui.onmessage = async (msg) => {
         svgNode.resize(msg.width, msg.height);
       }
       
+      // バッチ生成モードの場合、名前を設定
+      if (msg.isBatchGeneration && msg.batchItemTitle) {
+        svgNode.name = `${msg.batchItemTitle} (${msg.batchIndex + 1}/${msg.batchTotal})`;
+      } else {
+        svgNode.name = 'Generated SVG';
+      }
+      
       // ビューポートの中央に配置
       const center = figma.viewport.center;
       svgNode.x = center.x - svgNode.width / 2;
@@ -575,12 +582,20 @@ figma.ui.onmessage = async (msg) => {
       figma.currentPage.selection = [svgNode];
       figma.viewport.scrollAndZoomIntoView([svgNode]);
       
-      figma.ui.postMessage({ type: 'svg-inserted', success: true });
+      // 挿入したノードのIDを返す（一括生成モードでの追跡用）
+      figma.ui.postMessage({ 
+        type: 'svg-inserted', 
+        success: true,
+        nodeId: svgNode.id,
+        isBatchGeneration: msg.isBatchGeneration,
+        batchIndex: msg.batchIndex
+      });
     } catch (error) {
       figma.ui.postMessage({ 
         type: 'svg-inserted', 
         success: false, 
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
+        isBatchGeneration: msg.isBatchGeneration
       });
     }
   } else if (msg.type === 'insert-image') {

@@ -231,7 +231,7 @@ const App: React.FC = () => {
   const handleTemplateTypeChange = (type: TemplateType) => {
     setTemplateType(type);
     // ベーステンプレートでプロンプトを更新
-    setPrompt(getBasePromptForTemplate(type));
+    // setPrompt(getBasePromptForTemplate(type));
   };
   
   // ページデータを要求する

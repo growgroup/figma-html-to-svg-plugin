@@ -237,6 +237,8 @@ export async function callAIAPI(
     specificInstructions = `
     このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。
     画像箇所についてはすべてプレースホルダーとしてわかるようにしてください。
+     -  https://placehold.jp/150x150.png ※ 幅や高さも合わせて
+    HTMLコメントやCSSコメントは一切不要です。
     以下の点に注意してください：
     ${codingPrompt}
     `;

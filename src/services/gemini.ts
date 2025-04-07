@@ -123,8 +123,10 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - クラス名は接頭辞を利用して区別してください：
         - Layout: "l-"（例: l-header, l-main, l-container）
         - Component: "c-"（例: c-button, c-card, c-form）
-        - Project: "p-"（例: p-articles, p-news）※ 利用しないこと
+        - Project: "p-"（例: p-articles, p-news）※ 極力利用しないこと
         - Utility: "u-"（例: u-clearfix, u-hidden）
+      - クラス名は、コーディングしようとしているデザインにあった命名をしてください。
+        - 例 : .c-block-about、c-card-cases-list など
       - セマンティックなHTML5要素を適切に使用してください（header, footer, main, section, article, nav, aside など）
       - CSSはHTMLファイル内にstyleタグで記述してください
       - メディアクエリーは必要に応じて含めてください
@@ -132,8 +134,10 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - レスポンシブデザインに対応させる場合は、モバイルファーストの設計を心がけてください
       - アクセシビリティに配慮したマークアップを行ってください（適切なaria属性、alt属性など）
       - Figmaの選択要素のデザインを可能な限り正確に再現してください
-      - コメントを適宜挿入して、コードの構造を明確にしてください
       - 外部ライブラリやフレームワークは使用せず、純粋なHTML/CSSで実装してください
+      - 画像箇所についてはすべてプレースホルダーとしてわかるようにしてください。
+      -  https://placehold.jp/150x150.png ※ 幅や高さも合わせて
+      - HTMLコメントやCSSコメントは一切不要です。
       `;
     default:
       return '';

@@ -235,7 +235,9 @@ export async function callAIAPI(
   // コーディングモードで、かつカスタムプロンプトが指定されている場合、指示を上書き
   if (templateType === 'coding' && codingPrompt && codingPrompt !== 'FLOCSS') {
     specificInstructions = `
-    このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。以下の点に注意してください：
+    このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。
+    画像箇所についてはすべてプレースホルダーとしてわかるようにしてください。
+    以下の点に注意してください：
     ${codingPrompt}
     `;
   }

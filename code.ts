@@ -401,6 +401,15 @@ figma.clientStorage.getAsync('gemini-api-key').then(apiKey => {
   });
 });
 
+// HTMLコーディング用のプロンプトを取得
+figma.clientStorage.getAsync('coding-prompt').then(codingPrompt => {
+  // コーディングプロンプトをUIに送信
+  figma.ui.postMessage({
+    type: 'coding-prompt',
+    codingPrompt: codingPrompt || 'FLOCSS'
+  });
+});
+
 // UIからのメッセージ処理
 figma.ui.onmessage = async (msg) => {
   if (msg.type === 'ui-loaded') {
@@ -416,6 +425,13 @@ figma.ui.onmessage = async (msg) => {
         type: 'init-data',
         designTokens: collectDesignTokens(),
         selection: selectionInfo
+      });
+      
+      // コーディングプロンプトも送信
+      const codingPrompt = await figma.clientStorage.getAsync('coding-prompt') || 'FLOCSS';
+      figma.ui.postMessage({
+        type: 'coding-prompt',
+        codingPrompt: codingPrompt
       });
     } catch (error) {
       console.error('Error sending initial data:', error);
@@ -683,5 +699,29 @@ figma.ui.onmessage = async (msg) => {
     figma.ui.resize(msg.width, msg.height);
   } else if (msg.type === 'close-plugin') {
     figma.closePlugin(msg.message);
+  } else if (msg.type === 'save-coding-prompt') {
+    // コーディングプロンプトを保存
+    try {
+      await figma.clientStorage.setAsync('coding-prompt', msg.codingPrompt);
+      figma.notify('コーディングプロンプトを保存しました');
+    } catch (error) {
+      console.error('コーディングプロンプト保存エラー:', error);
+      figma.notify('コーディングプロンプトの保存に失敗しました', { error: true });
+    }
+  } else if (msg.type === 'get-coding-prompt') {
+    // コーディングプロンプト取得リクエストへの応答
+    try {
+      const codingPrompt = await figma.clientStorage.getAsync('coding-prompt') || 'FLOCSS';
+      figma.ui.postMessage({
+        type: 'coding-prompt-result',
+        codingPrompt
+      });
+    } catch (error) {
+      console.error('コーディングプロンプト取得エラー:', error);
+      figma.ui.postMessage({
+        type: 'coding-prompt-result',
+        codingPrompt: 'FLOCSS'
+      });
+    }
   }
 }; 

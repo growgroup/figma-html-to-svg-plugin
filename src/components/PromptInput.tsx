@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-export type TemplateType = 'webdesign' | 'presentation' | 'diagram' | 'wireframe';
+export type TemplateType = 'webdesign' | 'presentation' | 'diagram' | 'wireframe' | 'coding';
 
 // 単一プロンプトの型定義
 export interface PromptItem {
@@ -111,6 +111,12 @@ const PromptInput: React.FC<PromptInputProps> = ({
           'ECサイトの商品詳細ページの設計図を作成してください。商品画像カルーセル、説明、レビュー、関連商品の配置を含みます。',
           'ダッシュボードアプリの管理画面のワイヤーフレームを作成してください。サイドナビ、ヘッダー、統計ウィジェット、データテーブルを配置します。'
         ];
+      case 'coding':
+        return [
+          'ECサイトのカード型商品リスト部分をFLOCSS形式でコーディングしてください。商品画像、商品名、価格、在庫状況を表示します。',
+          'お問い合わせフォームをレスポンシブ対応でコーディングしてください。名前、メール、電話番号、お問い合わせ内容の入力欄を含みます。',
+          'ニュースサイトのヘッダー部分をコーディングしてください。ロゴ、メインナビゲーション、検索バー、ログインボタンを含みます。'
+        ];
       default:
         return [];
     }
@@ -120,9 +126,21 @@ const PromptInput: React.FC<PromptInputProps> = ({
     <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
       {/* テンプレートタイプのセレクター */}
       <div className="mb-4">
-        <p className="font-medium text-sm text-gray-700 mb-2">テンプレートタイプ:</p>
-        <div className="flex flex-wrap gap-4 mb-3">
-          <label className="flex items-center gap-2 cursor-pointer">
+        <p className="font-bold text-sm text-gray-700 mb-2">生成タイプ:</p>
+        <div className="flex flex-wrap gap-3 mb-3">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              name="templateType"
+              value="wireframe"
+              checked={templateType === 'wireframe'}
+              onChange={() => onTemplateTypeChange('wireframe')}
+              disabled={disabled}
+              className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">構成ラフ</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
             <input
               type="radio"
               name="templateType"
@@ -134,7 +152,7 @@ const PromptInput: React.FC<PromptInputProps> = ({
             />
             <span className="text-sm text-gray-700">Webデザイン</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-1 cursor-pointer">
             <input
               type="radio"
               name="templateType"
@@ -146,7 +164,7 @@ const PromptInput: React.FC<PromptInputProps> = ({
             />
             <span className="text-sm text-gray-700">プレゼン</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-1 cursor-pointer">
             <input
               type="radio"
               name="templateType"
@@ -158,17 +176,17 @@ const PromptInput: React.FC<PromptInputProps> = ({
             />
             <span className="text-sm text-gray-700">作図</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-1 cursor-pointer">
             <input
               type="radio"
               name="templateType"
-              value="wireframe"
-              checked={templateType === 'wireframe'}
-              onChange={() => onTemplateTypeChange('wireframe')}
+              value="coding"
+              checked={templateType === 'coding'}
+              onChange={() => onTemplateTypeChange('coding')}
               disabled={disabled}
               className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
             />
-            <span className="text-sm text-gray-700">構成ラフ</span>
+            <span className="text-sm text-gray-700">コーディング</span>
           </label>
         </div>
         
@@ -329,6 +347,8 @@ const getPlaceholderByType = (type: TemplateType): string => {
       return '作図したい図表の内容を説明してください...';
     case 'wireframe':
       return 'ワイヤーフレーム/構成ラフの内容を説明してください...';
+    case 'coding':
+      return 'コーディングしたい要素や画面の詳細を説明してください...';
     default:
       return 'HTMLを生成するためのプロンプトを入力してください...';
   }

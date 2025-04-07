@@ -11,7 +11,7 @@ const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
   if (!selection.length) {
     return (
       <div className="selection-preview">
-        <h3>選択要素</h3>
+        <h3 className="text-sm font-bold text-gray-800">選択要素</h3>
         <p className="no-selection">要素が選択されていません</p>
       </div>
     );
@@ -46,7 +46,7 @@ const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
 
   return (
     <div className="selection-preview">
-      <h3>選択要素 ({selection.length})</h3>
+      <h3 className="text-sm font-bold text-gray-800">選択要素 ({selection.length})</h3>
       <div className="selection-list">
         {selection.map((item) => (
           <div key={item.id} className="selection-item">

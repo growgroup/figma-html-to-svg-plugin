@@ -50,6 +50,9 @@ const App: React.FC = () => {
   // メインタブUI用の状態
   const [activeMainTab, setActiveMainTab] = React.useState<MainTabType>('generation');
   
+  // HTMLコーディング用のプロンプト設定
+  const [codingPrompt, setCodingPrompt] = React.useState('FLOCSS');
+  
   // 画像生成関連の状態変数
   const [imagePrompt, setImagePrompt] = React.useState('');
   const [generatedImage, setGeneratedImage] = React.useState<string | null>(null);
@@ -249,6 +252,10 @@ const App: React.FC = () => {
       } else if (message.type === 'page-data-result') {
         // ページデータを受け取ったら自動生成処理を実行
         generateBasePromptFromPageData(message.pageData);
+      } else if (message.type === 'coding-prompt') {
+        setCodingPrompt(message.codingPrompt || 'FLOCSS');
+      } else if (message.type === 'coding-prompt-result') {
+        setCodingPrompt(message.codingPrompt || 'FLOCSS');
       }
     };
   }, [apiKey, actualModelId, designTokens, isBatchGenerating, currentBatchIndex, promptItems.length]); // 依存配列に必要な変数を追加
@@ -427,6 +434,19 @@ const App: React.FC = () => {
     setBasePrompt(e.target.value);
   };
 
+  // コーディングプロンプト変更ハンドラー
+  const handleCodingPromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setCodingPrompt(e.target.value);
+    
+    // Figmaにコーディングプロンプトを保存
+    parent.postMessage({
+      pluginMessage: {
+        type: 'save-coding-prompt',
+        codingPrompt: e.target.value
+      }
+    }, '*');
+  };
+
   // 生成処理
   const handleGenerate = async () => {
     if (!apiKey) {
@@ -462,7 +482,8 @@ const App: React.FC = () => {
         designTokens, 
         finalPrompt,
         selection,
-        templateType
+        templateType,
+        templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );
       setHtmlResult(htmlContent);
       
@@ -593,19 +614,24 @@ const App: React.FC = () => {
   // バッチ内の次のプロンプトを生成する処理
   const handleBatchGenerate = async () => {
     if (currentBatchIndex >= promptItems.length) {
-      // 全ての項目が処理済みの場合は終了
       setIsBatchGenerating(false);
+      setCurrentBatchIndex(0);
       setProgress({ stage: '一括生成完了', percentage: 100 });
       setTimeout(() => setIsLoading(false), 1000);
       return;
     }
     
     const currentItem = promptItems[currentBatchIndex];
+    if (!currentItem || !currentItem.content) {
+      // 内容がない場合はスキップ
+      setCurrentBatchIndex(prevIndex => prevIndex + 1);
+      return;
+    }
     
     try {
-      // プログレス更新
+      // プログレス表示を更新
       setProgress({ 
-        stage: `${currentItem.title} (${currentBatchIndex + 1}/${promptItems.length}) 生成中...`, 
+        stage: `${currentItem.title || `プロンプト ${currentBatchIndex + 1}`} を処理中... (${currentBatchIndex + 1}/${promptItems.length})`, 
         percentage: Math.round((currentBatchIndex / promptItems.length) * 100) 
       });
       
@@ -634,7 +660,8 @@ const App: React.FC = () => {
         designTokens, 
         finalPrompt,
         selection,
-        templateType
+        templateType,
+        templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );
       
       // 幅と高さの処理
@@ -704,10 +731,10 @@ const App: React.FC = () => {
   // 生成タブのコンテンツをレンダリングする関数
   const renderGenerationTab = () => {
     return (
-      <div className="space-y-6">
+      <div className="space-y-2">
         {/* 生成サイズ設定 */}
         <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-          <h3 className="text-base font-medium text-gray-800 mb-3">生成サイズ設定</h3>
+          <h3 className="text-sm font-bold text-gray-800 mb-3">生成サイズ設定</h3>
           <div className="flex flex-row md:flex-row gap-4 mb-2">
             <div className="flex items-center gap-2">
               <label htmlFor="width-input" className="text-sm font-medium text-gray-700 min-w-12">幅:</label>
@@ -750,19 +777,19 @@ const App: React.FC = () => {
               className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
             />
             <label htmlFor="auto-size" className="ml-2 text-xs text-gray-700">
-              選択要素のサイズを自動設定
+              選択要素のサイズを自動設定 <span className="text-xs text-gray-500 mt-1">
+            ※ 'auto' または数値を入力してください
+          </span>
             </label>
           </div>
-          <p className="text-xs text-gray-500 mt-1">
-            ※ 'auto' または数値を入力してください
-          </p>
+          
         </div>
         
         {/* 選択要素の詳細取得設定 */}
         <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-          <h3 className="text-base font-medium text-gray-800 mb-3">選択要素の詳細取得設定</h3>
+          <h3 className="text-sm font-bold text-gray-800 mb-3">選択要素の詳細取得設定</h3>
           <div className="mb-2">
-            <div className="flex gap-x-3 mb-4">
+            <div className="flex gap-x-3 mb-2">
               <div className="flex justify-center items-center">
                 <input
                   type="checkbox"
@@ -775,7 +802,7 @@ const App: React.FC = () => {
               </div>
               <div className="text-right">
                 <label htmlFor="include-children" className="text-sm text-gray-700 cursor-pointer">
-                  子要素を再帰的に取得
+                  選択要素をレイヤーをデータとして取得
                 </label>
               </div>
             </div>
@@ -1056,6 +1083,34 @@ const App: React.FC = () => {
                 ※ ここに入力した内容はすべてのプロンプトの先頭に自動的に追加されます
               </p>
             </div>
+            
+            {/* HTMLコーディング用プロンプト設定 */}
+            <div className="mt-6">
+              <div className="flex justify-between items-center mb-1">
+                <label htmlFor="coding-prompt" className="text-sm font-medium text-gray-700">HTMLコーディング用プロンプト:</label>
+              </div>
+              <textarea
+                id="coding-prompt"
+                value={codingPrompt}
+                onChange={handleCodingPromptChange}
+                placeholder="FLOCSSをベースにしたHTMLコーディングの指示を入力..."
+                rows={4}
+                className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                ※ ここに入力した内容は「コーディング」モード選択時に適用されます（デフォルト: FLOCSS）
+              </p>
+              <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
+                <h4 className="text-xs font-medium text-gray-700 mb-2">コーディングフレームワーク例:</h4>
+                <ul className="space-y-1 pl-4 list-disc text-xs text-gray-600">
+                  <li>FLOCSS（Foundation, Layout, Object）</li>
+                  <li>SMACSS（Scalable and Modular Architecture for CSS）</li>
+                  <li>BEM（Block, Element, Modifier）</li>
+                  <li>OOCSS（Object Oriented CSS）</li>
+                  <li>Atomic Design</li>
+                </ul>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1302,7 +1357,7 @@ const App: React.FC = () => {
         {/* 選択要素の詳細取得設定 */}
         {!showChatInterface && (
           <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <h3 className="text-base font-medium text-gray-800 mb-3">選択要素の詳細取得設定</h3>
+            <h3 className="text-sm font-bold text-gray-800 mb-3">選択要素の詳細取得設定</h3>
             <div className="flex gap-x-3">
               <div className="flex justify-center items-center">
                 <input
@@ -1369,36 +1424,40 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="container mx-auto p-4 md:p-6 max-w-4xl">
-      <h1 className="text-2xl font-bold mb-6 text-gray-800">GG - AI Generator</h1>
-      
+    <div className="mx-auto p-2 pt-0  max-w-4xl">
+      <div className="flex justify-between items-center">
+        <h1 className="text-xl font-bold mb-4 text-gray-800 flex gap-2 items-center">
+          <span className="text-sm bg-slate-800 text-white rounded-sm flex items-center justify-center w-7 h-7 mr-0">GG</span>
+          AI Generator
+        </h1>
       {/* メインタブUI */}
-      <div className="mb-6">
+        <div className="mb-2">
         <div className="flex border-b border-gray-200">
           <button 
-            className={`px-4 py-2 text-sm font-medium transition-colors ${activeMainTab === 'generation' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'generation' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActiveMainTab('generation')}
           >
             生成
           </button>
           <button 
-            className={`px-4 py-2 text-sm font-medium transition-colors ${activeMainTab === 'image-generation' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'image-generation' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActiveMainTab('image-generation')}
           >
             画像生成
           </button>
           <button 
-            className={`px-4 py-2 text-sm font-medium transition-colors ${activeMainTab === 'tokens' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'tokens' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActiveMainTab('tokens')}
           >
             デザイントークン
           </button>
           <button 
-            className={`px-4 py-2 text-sm font-medium transition-colors ${activeMainTab === 'settings' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'settings' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActiveMainTab('settings')}
           >
             設定
           </button>
+          </div>
         </div>
       </div>
       

@@ -59,7 +59,6 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - コンテナ幅を定義(デフォルト1140px)した上でデザインすること
       - フレックスボックスまたはグリッドレイアウトを適切に使用
       - ホバー効果などは一切考慮しないでください。
-      - レガシーブラウザでも崩れがなく表示ができるようなHTML、CSSのコーディングを行ってください。
       `;
     case 'presentation':
       return `
@@ -69,7 +68,13 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - コントラストの高い色使い
       - コンテンツの階層をはっきりさせる
       - 図や表を使用する場合は、簡潔で分かりやすく
-      - レガシーブラウザでも崩れがなく表示ができるようなHTML、CSSのコーディングを行ってください。
+      - スライド1枚あたりの境界線がわかりやすいように生成すること
+        - 例
+            <div style="display: flex; flex-direction: column; gap: 100px; background: #e8e8e8;">
+                <section style="width: 1600px; height: 900px; background: #FFFFFF;">ここにスライド1の内容</section>
+                <section style="width: 1600px; height: 900px; background: #FFFFFF;">ここにスライド2の内容</section>
+            </div>
+
       `;
     case 'diagram':
       return `
@@ -79,7 +84,6 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - 適切なラベル付け
       - 色による情報伝達に依存しない（色覚異常の考慮）
       - 必要に応じて線や矢印で関係性を表現
-      - レガシーブラウザでも崩れがなく表示ができるようなHTML、CSSのコーディングを行ってください。
       `;
     case 'wireframe':
       return `
@@ -108,6 +112,28 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - レスポンシブ設定は不要。設定された横幅に対してのみの設計を行うこと
       - コンテナ幅を定義(デフォルト1140px)した上で設計すること
       - レガシーブラウザでも崩れがなく表示ができるようなHTML、CSSのコーディングを行ってください。
+      `;
+    case 'coding':
+      return `
+      このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。以下の点に注意してください：
+      - FLOCSS（Foundation, Layout, Object）の設計手法に基づいてコードを構成してください
+        - Foundation: リセットCSS、ベースとなるスタイル定義
+        - Layout: サイト全体のレイアウトを司るスタイル
+        - Object: 再利用可能なコンポーネント（Component）、プロジェクト固有のスタイル（Project）、ユーティリティクラス（Utility）
+      - クラス名は接頭辞を利用して区別してください：
+        - Layout: "l-"（例: l-header, l-main, l-container）
+        - Component: "c-"（例: c-button, c-card, c-form）
+        - Project: "p-"（例: p-articles, p-news）※ 利用しないこと
+        - Utility: "u-"（例: u-clearfix, u-hidden）
+      - セマンティックなHTML5要素を適切に使用してください（header, footer, main, section, article, nav, aside など）
+      - CSSはHTMLファイル内にstyleタグで記述してください
+      - メディアクエリーは必要に応じて含めてください
+      - BEM記法（Block__Element--Modifier）をクラス命名に採用してください
+      - レスポンシブデザインに対応させる場合は、モバイルファーストの設計を心がけてください
+      - アクセシビリティに配慮したマークアップを行ってください（適切なaria属性、alt属性など）
+      - Figmaの選択要素のデザインを可能な限り正確に再現してください
+      - コメントを適宜挿入して、コードの構造を明確にしてください
+      - 外部ライブラリやフレームワークは使用せず、純粋なHTML/CSSで実装してください
       `;
     default:
       return '';
@@ -182,7 +208,8 @@ export async function callAIAPI(
   designTokens: DesignTokens | null,
   userPrompt: string,
   selectedElements: SelectionInfo[],
-  templateType: TemplateType = 'webdesign' // デフォルト値を追加
+  templateType: TemplateType = 'webdesign', // デフォルト値を追加
+  codingPrompt: string = 'FLOCSS' // コーディングプロンプト用のパラメータを追加
 ): Promise<string> {
   // モデルIDからモデル情報を取得
   const customModel = modelId.includes('/') 
@@ -203,7 +230,15 @@ export async function callAIAPI(
   const cleanedSelectedElements = removeImageDataFromSelection(selectedElements);
 
   // テンプレートタイプに基づいた特別な指示を取得
-  const specificInstructions = getSpecificInstructions(templateType);
+  let specificInstructions = getSpecificInstructions(templateType);
+  
+  // コーディングモードで、かつカスタムプロンプトが指定されている場合、指示を上書き
+  if (templateType === 'coding' && codingPrompt && codingPrompt !== 'FLOCSS') {
+    specificInstructions = `
+    このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。以下の点に注意してください：
+    ${codingPrompt}
+    `;
+  }
 
   // プロンプト構築 (共通)
   let promptContent = `
@@ -212,9 +247,7 @@ export async function callAIAPI(
   
   # 指示
   上記の情報とアップロードされた画像をもとに、高品質なHTMLコードを生成してください。
-  CSSはインラインスタイルとして含めてください。
   外部リソースへの依存（外部CSSやJavaScriptなど）は避けてください。
-  セマンティックなHTMLを使用し、アクセシビリティに配慮してください。
   レスポンシブデザインに対応してください。
   
   ${specificInstructions}
@@ -265,12 +298,7 @@ export async function callAIAPI(
               text: promptContent
             }
           ]
-        }],
-        tools: [
-          {
-            google_search: {}
-          }
-        ]
+        }]
       };
       
       // 既存画像データがある場合は追加
@@ -312,11 +340,10 @@ export async function callAIAPI(
       // システムメッセージを改善
       const systemMessage = `
       あなたは高品質なHTMLコードを生成する専門家です。以下の情報をもとに、HTML/CSSコードを生成してください。
-      - CSSはインラインスタイルとして含めてください
       - 外部リソースへの依存は避けてください
-      - 生成したコードは最終的にSVGに変換し、figmaにインポートすることを想定すること。
-      - 以下の目的に応じて最適なデザインを再現すること。HTML/CSSはあくまでも表現のための手段であること。
+      - 生成したコードは最終的にSVGに変換し、figmaにインポートすることを想定すること。dom-to-svg を利用します。display: gridは利用しないこと。
       - ユーザーが提供した画像があれば、それを参考にデザインやレイアウトを作成すること。
+      - 以下の目的に応じて最適なデザインを再現すること。HTML/CSSはあくまでも表現のための手段であること。
       
       ${templateType === 'webdesign' ? 'Webデザイン用途に最適化してください。' : ''}
       ${templateType === 'presentation' ? 'プレゼンテーション用途に最適化してください。' : ''}

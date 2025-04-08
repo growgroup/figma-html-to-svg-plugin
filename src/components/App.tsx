@@ -474,6 +474,44 @@ const App: React.FC = () => {
       // プログレス更新
       setProgress({ stage: 'AIによるHTML生成中...', percentage: 20 });
       
+      // コーディングモードの場合、詳細な選択情報を改めて取得
+      let currentSelection = selection;
+      if (templateType === 'coding') {
+        // 詳細選択情報を取得するためのメッセージを送信
+        parent.postMessage(
+          { 
+            pluginMessage: { 
+              type: 'get-selection-with-template-type',
+              templateType: 'coding'
+            } 
+          },
+          '*'
+        );
+        
+        // 選択情報を受け取るための処理
+        const selectionPromise = new Promise<SelectionInfo[]>((resolve) => {
+          const messageHandler = (event: MessageEvent) => {
+            const message = event.data.pluginMessage;
+            if (message && message.type === 'selection-with-template-type-result') {
+              window.removeEventListener('message', messageHandler);
+              resolve(message.selection);
+            }
+          };
+          
+          window.addEventListener('message', messageHandler);
+          
+          // タイムアウト処理（5秒後にデフォルト値で解決）
+          setTimeout(() => {
+            window.removeEventListener('message', messageHandler);
+            resolve(selection); // タイムアウトした場合は現在の選択情報を使用
+          }, 5000);
+        });
+        
+        // 選択情報を待機
+        currentSelection = await selectionPromise;
+        console.log('コーディングモードで詳細な選択情報を取得:', currentSelection);
+      }
+      
       // AIモデルによるHTML生成（ベースプロンプトがあれば追加）
       const finalPrompt = basePrompt ? `${basePrompt}\n\n${prompt}` : prompt;
       const htmlContent = await callAIAPI(
@@ -481,7 +519,7 @@ const App: React.FC = () => {
         actualModelId, 
         designTokens, 
         finalPrompt,
-        selection,
+        currentSelection,
         templateType,
         templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );
@@ -635,6 +673,44 @@ const App: React.FC = () => {
         percentage: Math.round((currentBatchIndex / promptItems.length) * 100) 
       });
       
+      // コーディングモードの場合、詳細な選択情報を改めて取得
+      let currentSelection = selection;
+      if (templateType === 'coding') {
+        // 詳細選択情報を取得するためのメッセージを送信
+        parent.postMessage(
+          { 
+            pluginMessage: { 
+              type: 'get-selection-with-template-type',
+              templateType: 'coding'
+            } 
+          },
+          '*'
+        );
+        
+        // 選択情報を受け取るための処理
+        const selectionPromise = new Promise<SelectionInfo[]>((resolve) => {
+          const messageHandler = (event: MessageEvent) => {
+            const message = event.data.pluginMessage;
+            if (message && message.type === 'selection-with-template-type-result') {
+              window.removeEventListener('message', messageHandler);
+              resolve(message.selection);
+            }
+          };
+          
+          window.addEventListener('message', messageHandler);
+          
+          // タイムアウト処理（5秒後にデフォルト値で解決）
+          setTimeout(() => {
+            window.removeEventListener('message', messageHandler);
+            resolve(selection); // タイムアウトした場合は現在の選択情報を使用
+          }, 5000);
+        });
+        
+        // 選択情報を待機
+        currentSelection = await selectionPromise;
+        console.log('コーディングモード（バッチ）で詳細な選択情報を取得:', currentSelection);
+      }
+      
       // 過去に生成したアイテムを参照するためのコンテキスト情報を構築
       let contextInfo = '';
       if (generatedItems.length > 0) {
@@ -659,7 +735,7 @@ const App: React.FC = () => {
         actualModelId, 
         designTokens, 
         finalPrompt,
-        selection,
+        currentSelection,
         templateType,
         templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );

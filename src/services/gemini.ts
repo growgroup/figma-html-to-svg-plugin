@@ -136,7 +136,8 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - Figmaの選択要素のデザインを可能な限り正確に再現してください
       - 外部ライブラリやフレームワークは使用せず、純粋なHTML/CSSで実装してください
       - 画像箇所についてはすべてプレースホルダーとしてわかるようにしてください。
-      -  https://placehold.jp/150x150.png ※ 幅や高さも合わせて
+        - https://placehold.jp/150x150.png ※ 幅や高さも合わせて
+      - 簡単なアイコンなどSVGで再現できるものはSVGをコーディングしてください。
       - HTMLコメントやCSSコメントは一切不要です。
       `;
     default:
@@ -262,6 +263,24 @@ export async function callAIAPI(
   
   レスポンスはHTMLコードのみを返してください。
   `;
+  
+  // コーディングモードの場合、詳細なスタイル情報を強調
+  if (templateType === 'coding') {
+    // 詳細スタイル情報がある場合、それを強調
+    const hasDetailedStyles = cleanedSelectedElements.some(el => el.detailedStyles || (el.hierarchy && el.hierarchy.detailedStyles));
+    
+    if (hasDetailedStyles) {
+      promptContent = `
+      # Figma詳細スタイル情報
+      以下の詳細なスタイル情報を参考にして、正確なHTMLとCSSを生成してください。
+      レイアウト、余白、色、フォント、サイズなどの情報に注目してください。
+      
+      ${promptContent}
+      `;
+      
+      console.log('コーディングモード: 詳細スタイル情報を含むプロンプトを生成します');
+    }
+  }
   
   // ワイヤーフレームの場合はデザイントークンを含めないが、それ以外では含める
   if (templateType !== 'wireframe' && designTokens) {

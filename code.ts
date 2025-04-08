@@ -206,6 +206,13 @@ interface TextNodeLike {
   characters: string;
   fontSize?: unknown;
   fontName?: unknown;
+  fontWeight?: unknown;
+  letterSpacing?: unknown;
+  lineHeight?: unknown;
+  paragraphIndent?: unknown;
+  paragraphSpacing?: unknown;
+  textCase?: unknown;
+  textDecoration?: unknown;
 }
 
 // 要素を再帰的に処理する関数
@@ -293,76 +300,365 @@ async function exportSelectionAsImage(node: SceneNode): Promise<string | null> {
 }
 
 // 選択要素の情報を取得
-async function getSelectionInfo(includeChildren: boolean = false, includeImages: boolean = false) {
-  // 通常の選択情報
-  const basicInfo = figma.currentPage.selection.map(node => {
-    const base = {
-      id: node.id,
-      name: node.name,
-      type: node.type,
-      visible: node.visible
-    };
+async function getSelectionInfo(includeChildren: boolean = false, includeImages: boolean = false, templateType?: string) {
+  try {
+    // 通常の選択情報
+    const basicInfo = figma.currentPage.selection.map(node => {
+      console.log(node)
+      const base = {
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        visible: node.visible
+      };
 
-    // 特定のタイプに応じた追加情報
-    if ('fills' in node) {
-      return { ...base, fills: node.fills };
-    }
-    
-    // TextNodeの場合の処理
-    try {
-      if ('characters' in node) {
-        const textNode = node as unknown as TextNodeLike;
-        return {
-          ...base,
-          characters: textNode.characters,
-          fontSize: textNode.fontSize || 'unknown',
-          fontName: textNode.fontName || { family: 'unknown', style: 'unknown' }
-        };
+      // 特定のタイプに応じた追加情報
+      if ('fills' in node) {
+        return { ...base, fills: node.fills };
       }
-    } catch (e) {
-      // エラー発生時は何もしない
+      
+      // TextNodeの場合の処理
+      try {
+        if ('characters' in node) {
+          const textNode = node as unknown as TextNodeLike;
+          return {
+            ...base,
+            characters: textNode.characters,
+            fontSize: textNode.fontSize || 'unknown',
+            fontWeight: textNode.fontWeight || 'unknown',
+            fontName: textNode.fontName || { family: 'unknown', style: 'unknown' }
+          };
+        }
+      } catch (e) {
+        // エラー発生時は何もしない
+      }
+      
+      return base;
+    });
+    
+    // コーディング用の詳細情報を取得
+    if (templateType === 'coding') {
+      const detailedInfo = figma.currentPage.selection.map(node => getDetailedNodeInfo(node));
+      
+      // 基本情報と詳細情報を結合
+      const codingInfo = basicInfo.map((baseNode, index) => ({
+        ...baseNode,
+        detailedStyles: detailedInfo[index]
+      }));
+      
+      // 階層情報も取得する場合、詳細情報も含める
+      if (includeChildren) {
+        const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursiveWithStyles(node));
+        
+        const combinedInfo = codingInfo.map((codeNode, index) => ({
+          ...codeNode,
+          hierarchy: hierarchyInfo[index]
+        }));
+        
+        // 画像も含める場合
+        if (includeImages) {
+          const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+          const images = await Promise.all(imagePromises);
+          
+          const result = combinedInfo.map((node, index) => ({
+            ...node,
+            imageData: images[index]
+          }));
+          
+          // JSON.stringifyとJSO.parseでシリアライズ可能なデータだけを確実に返す
+          return JSON.parse(JSON.stringify(result, (key, value) => {
+            // Base64の画像データは特別に処理（そのまま保持）
+            if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+              return value;
+            }
+            return value;
+          }));
+        }
+        
+        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+        return JSON.parse(JSON.stringify(combinedInfo));
+      }
+      
+      // 画像のみ含める場合
+      if (includeImages) {
+        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+        const images = await Promise.all(imagePromises);
+        
+        const result = codingInfo.map((node, index) => ({
+          ...node,
+          imageData: images[index]
+        }));
+        
+        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+        return JSON.parse(JSON.stringify(result, (key, value) => {
+          // Base64の画像データは特別に処理（そのまま保持）
+          if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+            return value;
+          }
+          return value;
+        }));
+      }
+      
+      // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+      return JSON.parse(JSON.stringify(codingInfo));
     }
     
-    return base;
-  });
-  
-  // 階層情報も取得する場合
-  if (includeChildren) {
-    const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+    // 通常の階層情報処理（非コーディングモード）
+    if (includeChildren) {
+      const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+      
+      // 基本情報と階層情報を結合
+      const combinedInfo = basicInfo.map((baseNode, index) => ({
+        ...baseNode,
+        hierarchy: hierarchyInfo[index]
+      }));
+      
+      // 画像も含める場合
+      if (includeImages) {
+        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+        const images = await Promise.all(imagePromises);
+        
+        const result = combinedInfo.map((node, index) => ({
+          ...node,
+          imageData: images[index]
+        }));
+        
+        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+        return JSON.parse(JSON.stringify(result, (key, value) => {
+          // Base64の画像データは特別に処理（そのまま保持）
+          if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+            return value;
+          }
+          return value;
+        }));
+      }
+      
+      // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+      return JSON.parse(JSON.stringify(combinedInfo));
+    }
     
-    // 基本情報と階層情報を結合
-    const combinedInfo = basicInfo.map((baseNode, index) => ({
-      ...baseNode,
-      hierarchy: hierarchyInfo[index]
-    }));
-    
-    // 画像も含める場合
+    // 画像のみ含める場合
     if (includeImages) {
       const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
       const images = await Promise.all(imagePromises);
       
-      return combinedInfo.map((node, index) => ({
+      const result = basicInfo.map((node, index) => ({
         ...node,
         imageData: images[index]
       }));
+      
+      // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+      return JSON.parse(JSON.stringify(result, (key, value) => {
+        // Base64の画像データは特別に処理（そのまま保持）
+        if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+          return value;
+        }
+        return value;
+      }));
     }
     
-    return combinedInfo;
-  }
-  
-  // 画像のみ含める場合
-  if (includeImages) {
-    const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
-    const images = await Promise.all(imagePromises);
-    
-    return basicInfo.map((node, index) => ({
-      ...node,
-      imageData: images[index]
+    // 基本情報のみ返す（JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す）
+    return JSON.parse(JSON.stringify(basicInfo));
+  } catch (error) {
+    console.error('選択情報取得エラー:', error);
+    // エラーが発生した場合、最小限の情報だけを返す
+    return figma.currentPage.selection.map(node => ({
+      id: node.id,
+      name: node.name,
+      type: node.type
     }));
   }
-  
-  // 基本情報のみ返す
-  return basicInfo;
+}
+
+// コーディングに必要な詳細なノード情報を取得する関数
+function getDetailedNodeInfo(node: SceneNode): any {
+  try {
+    const detailedInfo: any = {};
+    
+    // 位置情報
+    if ('absoluteBoundingBox' in node && node.absoluteBoundingBox) {
+      detailedInfo.bounds = {
+        x: node.absoluteBoundingBox.x,
+        y: node.absoluteBoundingBox.y,
+        width: node.absoluteBoundingBox.width,
+        height: node.absoluteBoundingBox.height
+      };
+    } else if ('x' in node && 'y' in node && 'width' in node && 'height' in node) {
+      detailedInfo.bounds = {
+        x: (node as any).x,
+        y: (node as any).y,
+        width: (node as any).width,
+        height: (node as any).height
+      };
+    }
+    
+    // フレームのスタイル情報
+    if (node.type === 'FRAME' || node.type === 'GROUP' || node.type === 'INSTANCE') {
+      const frameNode = node as FrameNode | GroupNode | InstanceNode;
+      
+      // レイアウト情報
+      if ('layoutMode' in frameNode) {
+        detailedInfo.layout = {
+          mode: frameNode.layoutMode,
+          direction: 'layoutDirection' in frameNode ? frameNode.layoutDirection : null,
+          alignment: 'primaryAxisAlignItems' in frameNode ? {
+            primaryAxis: frameNode.primaryAxisAlignItems,
+            counterAxis: frameNode.counterAxisAlignItems
+          } : null,
+          padding: 'paddingTop' in frameNode ? {
+            top: frameNode.paddingTop,
+            right: frameNode.paddingRight,
+            bottom: frameNode.paddingBottom,
+            left: frameNode.paddingLeft
+          } : null,
+          spacing: 'itemSpacing' in frameNode ? frameNode.itemSpacing : null
+        };
+      }
+      
+      // 背景色
+      if ('backgrounds' in frameNode && Array.isArray(frameNode.backgrounds)) {
+        detailedInfo.backgrounds = frameNode.backgrounds;
+      }
+      
+      // エフェクト（シャドウなど）
+      if ('effects' in frameNode && Array.isArray(frameNode.effects)) {
+        detailedInfo.effects = frameNode.effects;
+      }
+      
+      // 枠線
+      if ('strokes' in frameNode && Array.isArray(frameNode.strokes)) {
+        detailedInfo.strokes = frameNode.strokes;
+        
+        if ('strokeWeight' in frameNode) {
+          detailedInfo.strokeWeight = frameNode.strokeWeight;
+        }
+        
+        if ('strokeAlign' in frameNode) {
+          detailedInfo.strokeAlign = frameNode.strokeAlign;
+        }
+      }
+      
+      // 角丸
+      if ('cornerRadius' in frameNode) {
+        detailedInfo.cornerRadius = frameNode.cornerRadius;
+      }
+    }
+    
+    // テキストスタイル情報
+    if (node.type === 'TEXT') {
+      const textNode = node as TextNode;
+      detailedInfo.text = {
+        characters: textNode.characters,
+        fontSize: textNode.fontSize,
+        fontName: textNode.fontName,
+        fontWeight: textNode.fontWeight,
+        letterSpacing: textNode.letterSpacing,
+        lineHeight: textNode.lineHeight,
+        paragraphIndent: textNode.paragraphIndent,
+        paragraphSpacing: textNode.paragraphSpacing,
+        textAlignHorizontal: textNode.textAlignHorizontal,
+        textAlignVertical: textNode.textAlignVertical,
+        textCase: textNode.textCase,
+        textDecoration: textNode.textDecoration,
+        textAutoResize: textNode.textAutoResize
+      };
+      
+      // テキストスタイル
+      if ('fills' in textNode && Array.isArray(textNode.fills)) {
+        detailedInfo.text.fills = textNode.fills;
+      }
+    }
+    
+    // ベクターノードの場合
+    if (node.type === 'VECTOR' || node.type === 'LINE' || node.type === 'ELLIPSE' || node.type === 'POLYGON' || node.type === 'STAR' || node.type === 'RECTANGLE') {
+      if ('fills' in node && Array.isArray(node.fills)) {
+        detailedInfo.fills = node.fills;
+      }
+      
+      if ('strokes' in node && Array.isArray(node.strokes)) {
+        detailedInfo.strokes = node.strokes;
+        
+        if ('strokeWeight' in node) {
+          detailedInfo.strokeWeight = node.strokeWeight;
+        }
+        
+        if ('strokeAlign' in node) {
+          detailedInfo.strokeAlign = node.strokeAlign;
+        }
+      }
+      
+      // 矩形の場合の角丸
+      if (node.type === 'RECTANGLE' && 'cornerRadius' in node) {
+        detailedInfo.cornerRadius = node.cornerRadius;
+      }
+    }
+    
+    // コンポーネント情報
+    if (node.type === 'COMPONENT' || node.type === 'INSTANCE') {
+      detailedInfo.component = {
+        id: node.id,
+        name: node.name
+      };
+      
+      if (node.type === 'INSTANCE' && 'componentId' in node) {
+        detailedInfo.component.componentId = node.componentId;
+      }
+    }
+    
+    // オブジェクトをJSON.stringify→JSON.parseでシリアライズ可能なものだけにする
+    return JSON.parse(JSON.stringify(detailedInfo));
+  } catch (error) {
+    console.error('詳細情報取得エラー:', error);
+    // エラーが発生した場合は最小限の情報を返す
+    return {
+      id: node.id,
+      type: node.type,
+      name: node.name
+    };
+  }
+}
+
+// 階層構造を持つノードの詳細情報を再帰的に取得（スタイル情報含む）
+function getNodeInfoRecursiveWithStyles(node: SceneNode): any {
+  try {
+    // 基本情報と詳細スタイル情報を取得
+    const baseInfo = getNodeInfoRecursive(node);
+    const detailedInfo = getDetailedNodeInfo(node);
+    
+    // 情報を結合
+    const combinedInfo = {
+      ...baseInfo,
+      detailedStyles: detailedInfo
+    };
+    
+    // 子要素を持つ場合、再帰的に処理（深さに制限を設ける）
+    const childrenContainer = node as ChildrenMixin;
+    if ('children' in node && Array.isArray(childrenContainer.children)) {
+      try {
+        // 子要素が多すぎる場合はデータ量を制限する
+        const maxChildren = 10; // 子要素の最大数を制限
+        const childrenArray = Array.from(childrenContainer.children).slice(0, maxChildren);
+        const childrenNodes = childrenArray.map(child => getNodeInfoRecursiveWithStyles(child));
+        combinedInfo.children = childrenNodes;
+        combinedInfo.childrenCount = childrenContainer.children.length; // 実際の子要素数を記録
+        combinedInfo.truncated = childrenContainer.children.length > maxChildren; // 切り捨てられたかどうか
+      } catch (e) {
+        // 子要素の処理中にエラーが発生した場合
+        console.error('Error processing children with styles:', e);
+      }
+    }
+    
+    // オブジェクトをJSON.stringify→JSON.parseでシリアライズ可能なものだけにする
+    return JSON.parse(JSON.stringify(combinedInfo));
+  } catch (error) {
+    console.error('再帰的詳細情報取得エラー:', error);
+    // エラーが発生した場合は最小限の情報を返す
+    return {
+      id: node.id,
+      type: node.type,
+      name: node.name
+    };
+  }
 }
 
 // 選択変更時のイベント
@@ -418,8 +714,11 @@ figma.ui.onmessage = async (msg) => {
       // UIが読み込まれたらデータを送信
       const includeChildren = await figma.clientStorage.getAsync('include-children') || false;
       const includeImages = await figma.clientStorage.getAsync('include-images') || false;
+      // コーディングプロンプトを取得してtemplateTypeとして使用
+      const codingPrompt = await figma.clientStorage.getAsync('coding-prompt') || 'FLOCSS';
+      const templateType = 'coding'; // デフォルトはcodingとして初期化
       
-      const selectionInfo = await getSelectionInfo(includeChildren, includeImages);
+      const selectionInfo = await getSelectionInfo(includeChildren, includeImages, templateType);
       
       figma.ui.postMessage({
         type: 'init-data',
@@ -428,7 +727,6 @@ figma.ui.onmessage = async (msg) => {
       });
       
       // コーディングプロンプトも送信
-      const codingPrompt = await figma.clientStorage.getAsync('coding-prompt') || 'FLOCSS';
       figma.ui.postMessage({
         type: 'coding-prompt',
         codingPrompt: codingPrompt
@@ -448,13 +746,13 @@ figma.ui.onmessage = async (msg) => {
     }
   } else if (msg.type === 'update-selection-settings') {
     // 選択要素取得の設定を更新
-    const { includeChildren, includeImages } = msg;
+    const { includeChildren, includeImages, templateType } = msg;
     await figma.clientStorage.setAsync('include-children', includeChildren);
     await figma.clientStorage.setAsync('include-images', includeImages);
     
     try {
       // 最新の選択情報を送信
-      const selectionInfo = await getSelectionInfo(includeChildren, includeImages);
+      const selectionInfo = await getSelectionInfo(includeChildren, includeImages, templateType);
       figma.ui.postMessage({
         type: 'selection-update',
         selection: selectionInfo
@@ -478,6 +776,7 @@ figma.ui.onmessage = async (msg) => {
         apiKey: ''
       });
     }
+
   } else if (msg.type === 'save-api-key') {
     // APIキー保存
     try {
@@ -722,6 +1021,24 @@ figma.ui.onmessage = async (msg) => {
         type: 'coding-prompt-result',
         codingPrompt: 'FLOCSS'
       });
+    }
+  } else if (msg.type === 'get-selection-with-template-type') {
+    // テンプレートタイプを指定して選択情報を取得
+    try {
+      const includeChildren = await figma.clientStorage.getAsync('include-children') || false;
+      const includeImages = await figma.clientStorage.getAsync('include-images') || false;
+      const templateType = msg.templateType;
+      
+      const selectionInfo = await getSelectionInfo(includeChildren, includeImages, templateType);
+      
+      figma.ui.postMessage({
+        type: 'selection-with-template-type-result',
+        selection: selectionInfo,
+        templateType: templateType
+      });
+    } catch (error) {
+      console.error('テンプレートタイプ付き選択情報取得エラー:', error);
+      figma.notify('選択情報の取得中にエラーが発生しました。' + error.message, { error: true });
     }
   }
 }; 

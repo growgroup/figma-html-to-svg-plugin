@@ -125,12 +125,12 @@ function getSpecificInstructions(templateType: TemplateType): string {
         - Component: "c-"（例: c-button, c-card, c-form）
         - Project: "p-"（例: p-articles, p-news）※ 極力利用しないこと
         - Utility: "u-"（例: u-clearfix, u-hidden）
+      - 状態は is-* でコーディングしてください。
       - クラス名は、コーディングしようとしているデザインにあった命名をしてください。
         - 例 : .c-block-about、c-card-cases-list など
       - セマンティックなHTML5要素を適切に使用してください（header, footer, main, section, article, nav, aside など）
       - CSSはHTMLファイル内にstyleタグで記述してください
       - メディアクエリーは必要に応じて含めてください
-      - BEM記法（Block__Element--Modifier）をクラス命名に採用してください
       - レスポンシブデザインに対応させる場合は、モバイルファーストの設計を心がけてください
       - アクセシビリティに配慮したマークアップを行ってください（適切なaria属性、alt属性など）
       - Figmaの選択要素のデザインを可能な限り正確に再現してください

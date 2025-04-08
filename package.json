@@ -5,7 +5,7 @@
   "main": "code.js",
   "scripts": {
     "build": "webpack --mode=production",
-    "dev": "webpack --mode=development --watch"
+    "dev": "chokidar \"src/**/*\" -c \"npm run build\" --initial "
   },
   "dependencies": {
     "@aurokk/dom-to-svg": "^1.0.4",
@@ -30,6 +30,7 @@
     "@figma/plugin-typings": "^1.109.0",
     "@types/react": "^18.0.27",
     "@types/react-dom": "^18.0.10",
+    "chokidar": "^4.0.3",
     "css-loader": "^6.11.0",
     "html-inline-script-webpack-plugin": "^3.2.1",
     "html-webpack-plugin": "^5.5.0",

@@ -302,43 +302,100 @@ async function exportSelectionAsImage(node: SceneNode): Promise<string | null> {
 // 選択要素の情報を取得
 async function getSelectionInfo(includeChildren: boolean = false, includeImages: boolean = false, templateType?: string) {
   try {
+    // エラーが起きそうな要素があるかチェック
+    const hasProblematicInstance = figma.currentPage.selection.some(node => {
+      return node.type === 'INSTANCE' && 
+        (!node.mainComponent || typeof node.mainComponent === 'symbol');
+    });
+    
+    if (hasProblematicInstance) {
+      console.log('シリアライズできないインスタンスを検出しました。安全モードで処理します。');
+    }
+    
     // 通常の選択情報
     const basicInfo = figma.currentPage.selection.map(node => {
-      console.log(node)
-      const base = {
-        id: node.id,
-        name: node.name,
-        type: node.type,
-        visible: node.visible
-      };
-
-      // 特定のタイプに応じた追加情報
-      if ('fills' in node) {
-        return { ...base, fills: node.fills };
-      }
-      
-      // TextNodeの場合の処理
       try {
-        if ('characters' in node) {
-          const textNode = node as unknown as TextNodeLike;
-          return {
-            ...base,
-            characters: textNode.characters,
-            fontSize: textNode.fontSize || 'unknown',
-            fontWeight: textNode.fontWeight || 'unknown',
-            fontName: textNode.fontName || { family: 'unknown', style: 'unknown' }
-          };
+        const base = {
+          id: node.id,
+          name: node.name,
+          type: node.type,
+          visible: node.visible
+        };
+
+        // 特定のタイプに応じた追加情報
+        if ('fills' in node) {
+          try {
+            // fillsを安全に処理
+            const safeFills = Array.isArray(node.fills) ? 
+              node.fills.map(fill => {
+                if (fill && fill.type === 'SOLID' && fill.color) {
+                  return {
+                    type: fill.type,
+                    color: {
+                      r: fill.color.r,
+                      g: fill.color.g,
+                      b: fill.color.b
+                    },
+                    opacity: fill.opacity
+                  };
+                }
+                return { type: fill ? fill.type : 'unknown' };
+              }) : [];
+              
+            return { ...base, fills: safeFills };
+          } catch (e) {
+            console.error('fills処理エラー:', e);
+            return base;
+          }
         }
-      } catch (e) {
-        // エラー発生時は何もしない
+        
+        // TextNodeの場合の処理
+        if ('characters' in node) {
+          try {
+            const textNode = node as unknown as TextNodeLike;
+            return {
+              ...base,
+              characters: textNode.characters,
+              fontSize: textNode.fontSize || 'unknown',
+              fontWeight: textNode.fontWeight || 'unknown',
+              fontName: typeof textNode.fontName === 'object' && textNode.fontName ? {
+                family: 'family' in textNode.fontName ? textNode.fontName.family : 'unknown',
+                style: 'style' in textNode.fontName ? textNode.fontName.style : 'unknown'
+              } : { family: 'unknown', style: 'unknown' }
+            };
+          } catch (e) {
+            console.error('テキストノード処理エラー:', e);
+            return base;
+          }
+        }
+        
+        return base;
+      } catch (error) {
+        console.error('基本情報取得エラー:', error);
+        return { 
+          id: node.id || 'unknown-id', 
+          name: node.name || 'unknown-name', 
+          type: node.type || 'unknown-type' 
+        };
       }
-      
-      return base;
     });
     
     // コーディング用の詳細情報を取得
     if (templateType === 'coding') {
-      const detailedInfo = figma.currentPage.selection.map(node => getDetailedNodeInfo(node));
+      // 安全に詳細情報を取得
+      const detailedInfo = figma.currentPage.selection.map(node => {
+        try {
+          return getDetailedNodeInfo(node);
+        } catch (error) {
+          console.error('詳細情報取得エラー:', error, node);
+          return { 
+            id: node.id, 
+            name: node.name, 
+            type: node.type,
+            error: 'データ取得エラー'
+          };
+        }
+      });
       
       // 基本情報と詳細情報を結合
       const codingInfo = basicInfo.map((baseNode, index) => ({
@@ -348,117 +405,203 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
       
       // 階層情報も取得する場合、詳細情報も含める
       if (includeChildren) {
-        const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursiveWithStyles(node));
-        
-        const combinedInfo = codingInfo.map((codeNode, index) => ({
-          ...codeNode,
-          hierarchy: hierarchyInfo[index]
-        }));
-        
-        // 画像も含める場合
-        if (includeImages) {
+        try {
+          // 安全に階層情報を取得
+          const hierarchyInfo = figma.currentPage.selection.map(node => {
+            try {
+              return getNodeInfoRecursiveWithStyles(node);
+            } catch (error) {
+              console.error('階層情報取得エラー:', error, node);
+              return { 
+                id: node.id, 
+                name: node.name, 
+                type: node.type,
+                error: '階層データ取得エラー'
+              };
+            }
+          });
+          
+          const combinedInfo = codingInfo.map((codeNode, index) => ({
+            ...codeNode,
+            hierarchy: hierarchyInfo[index]
+          }));
+          
+          // 画像も含める場合
+          if (includeImages) {
+            try {
+              const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+              const images = await Promise.all(imagePromises);
+              
+              const result = combinedInfo.map((node, index) => ({
+                ...node,
+                imageData: images[index]
+              }));
+              
+              // JSON.stringifyとJSO.parseでシリアライズ可能なデータだけを確実に返す
+              return JSON.parse(JSON.stringify(result, (key, value) => {
+                // Base64の画像データは特別に処理（そのまま保持）
+                if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+                  return value;
+                }
+                // Symbolはnullに変換
+                if (typeof value === 'symbol') {
+                  return null;
+                }
+                return value;
+              }));
+            } catch (error) {
+              console.error('画像含む階層情報取得エラー:', error);
+              return combinedInfo.map(node => ({
+                ...node,
+                error: '画像取得エラー'
+              }));
+            }
+          }
+          
+          // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+          return JSON.parse(JSON.stringify(combinedInfo, (key, value) => {
+            // Symbolはnullに変換
+            if (typeof value === 'symbol') {
+              return null;
+            }
+            return value;
+          }));
+        } catch (error) {
+          console.error('階層情報処理エラー:', error);
+          return codingInfo;
+        }
+      }
+      
+      // 画像のみ含める場合
+      if (includeImages) {
+        try {
           const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
           const images = await Promise.all(imagePromises);
           
-          const result = combinedInfo.map((node, index) => ({
+          const result = codingInfo.map((node, index) => ({
             ...node,
             imageData: images[index]
           }));
           
-          // JSON.stringifyとJSO.parseでシリアライズ可能なデータだけを確実に返す
+          // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
           return JSON.parse(JSON.stringify(result, (key, value) => {
             // Base64の画像データは特別に処理（そのまま保持）
             if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
               return value;
             }
+            // Symbolはnullに変換
+            if (typeof value === 'symbol') {
+              return null;
+            }
             return value;
           }));
+        } catch (error) {
+          console.error('画像情報処理エラー:', error);
+          return codingInfo;
         }
-        
-        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
-        return JSON.parse(JSON.stringify(combinedInfo));
-      }
-      
-      // 画像のみ含める場合
-      if (includeImages) {
-        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
-        const images = await Promise.all(imagePromises);
-        
-        const result = codingInfo.map((node, index) => ({
-          ...node,
-          imageData: images[index]
-        }));
-        
-        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
-        return JSON.parse(JSON.stringify(result, (key, value) => {
-          // Base64の画像データは特別に処理（そのまま保持）
-          if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
-            return value;
-          }
-          return value;
-        }));
       }
       
       // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
-      return JSON.parse(JSON.stringify(codingInfo));
-    }
-    
-    // 通常の階層情報処理（非コーディングモード）
-    if (includeChildren) {
-      const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
-      
-      // 基本情報と階層情報を結合
-      const combinedInfo = basicInfo.map((baseNode, index) => ({
-        ...baseNode,
-        hierarchy: hierarchyInfo[index]
-      }));
-      
-      // 画像も含める場合
-      if (includeImages) {
-        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
-        const images = await Promise.all(imagePromises);
-        
-        const result = combinedInfo.map((node, index) => ({
-          ...node,
-          imageData: images[index]
-        }));
-        
-        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
-        return JSON.parse(JSON.stringify(result, (key, value) => {
-          // Base64の画像データは特別に処理（そのまま保持）
-          if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
-            return value;
-          }
-          return value;
-        }));
-      }
-      
-      // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
-      return JSON.parse(JSON.stringify(combinedInfo));
-    }
-    
-    // 画像のみ含める場合
-    if (includeImages) {
-      const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
-      const images = await Promise.all(imagePromises);
-      
-      const result = basicInfo.map((node, index) => ({
-        ...node,
-        imageData: images[index]
-      }));
-      
-      // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
-      return JSON.parse(JSON.stringify(result, (key, value) => {
-        // Base64の画像データは特別に処理（そのまま保持）
-        if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
-          return value;
+      return JSON.parse(JSON.stringify(codingInfo, (key, value) => {
+        // Symbolはnullに変換
+        if (typeof value === 'symbol') {
+          return null;
         }
         return value;
       }));
     }
     
+    // 通常の階層情報処理（非コーディングモード）
+    if (includeChildren) {
+      try {
+        const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+        
+        // 基本情報と階層情報を結合
+        const combinedInfo = basicInfo.map((baseNode, index) => ({
+          ...baseNode,
+          hierarchy: hierarchyInfo[index]
+        }));
+        
+        // 画像も含める場合
+        if (includeImages) {
+          try {
+            const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+            const images = await Promise.all(imagePromises);
+            
+            const result = combinedInfo.map((node, index) => ({
+              ...node,
+              imageData: images[index]
+            }));
+            
+            // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+            return JSON.parse(JSON.stringify(result, (key, value) => {
+              // Base64の画像データは特別に処理（そのまま保持）
+              if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+                return value;
+              }
+              // Symbolはnullに変換
+              if (typeof value === 'symbol') {
+                return null;
+              }
+              return value;
+            }));
+          } catch (error) {
+            console.error('画像含む階層情報処理エラー:', error);
+            return combinedInfo;
+          }
+        }
+        
+        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+        return JSON.parse(JSON.stringify(combinedInfo, (key, value) => {
+          // Symbolはnullに変換
+          if (typeof value === 'symbol') {
+            return null;
+          }
+          return value;
+        }));
+      } catch (error) {
+        console.error('階層情報処理エラー:', error);
+        return basicInfo;
+      }
+    }
+    
+    // 画像のみ含める場合
+    if (includeImages) {
+      try {
+        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+        const images = await Promise.all(imagePromises);
+        
+        const result = basicInfo.map((node, index) => ({
+          ...node,
+          imageData: images[index]
+        }));
+        
+        // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+        return JSON.parse(JSON.stringify(result, (key, value) => {
+          // Base64の画像データは特別に処理（そのまま保持）
+          if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+            return value;
+          }
+          // Symbolはnullに変換
+          if (typeof value === 'symbol') {
+            return null;
+          }
+          return value;
+        }));
+      } catch (error) {
+        console.error('画像情報処理エラー:', error);
+        return basicInfo;
+      }
+    }
+    
     // 基本情報のみ返す（JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す）
-    return JSON.parse(JSON.stringify(basicInfo));
+    return JSON.parse(JSON.stringify(basicInfo, (key, value) => {
+      // Symbolはnullに変換
+      if (typeof value === 'symbol') {
+        return null;
+      }
+      return value;
+    }));
   } catch (error) {
     console.error('選択情報取得エラー:', error);
     // エラーが発生した場合、最小限の情報だけを返す
@@ -517,17 +660,70 @@ function getDetailedNodeInfo(node: SceneNode): any {
       
       // 背景色
       if ('backgrounds' in frameNode && Array.isArray(frameNode.backgrounds)) {
-        detailedInfo.backgrounds = frameNode.backgrounds;
+        try {
+          // 安全に背景データをコピー
+          const safeBackgrounds = frameNode.backgrounds.map(bg => {
+            if (bg.type === 'SOLID') {
+              return {
+                type: bg.type,
+                color: bg.color ? {
+                  r: bg.color.r,
+                  g: bg.color.g,
+                  b: bg.color.b
+                } : undefined,
+                opacity: bg.opacity
+              };
+            }
+            // その他のタイプの背景はタイプのみ保持
+            return { type: bg.type };
+          });
+          detailedInfo.backgrounds = safeBackgrounds;
+        } catch (e) {
+          console.error('背景情報処理エラー:', e);
+        }
       }
       
       // エフェクト（シャドウなど）
       if ('effects' in frameNode && Array.isArray(frameNode.effects)) {
-        detailedInfo.effects = frameNode.effects;
+        try {
+          // 安全にエフェクトデータをコピー
+          const safeEffects = frameNode.effects.map(effect => {
+            return {
+              type: effect.type,
+              visible: effect.visible,
+              radius: effect.radius,
+              // 他の安全なプロパティも必要に応じて追加
+            };
+          });
+          detailedInfo.effects = safeEffects;
+        } catch (e) {
+          console.error('エフェクト情報処理エラー:', e);
+        }
       }
       
       // 枠線
       if ('strokes' in frameNode && Array.isArray(frameNode.strokes)) {
-        detailedInfo.strokes = frameNode.strokes;
+        try {
+          // 安全にストロークデータをコピー
+          const safeStrokes = frameNode.strokes.map(stroke => {
+            if (stroke.type === 'SOLID') {
+              return {
+                type: stroke.type,
+                color: stroke.color ? {
+                  r: stroke.color.r,
+                  g: stroke.color.g,
+                  b: stroke.color.b
+                } : undefined,
+                opacity: stroke.opacity
+              };
+            }
+            // その他のタイプのストロークはタイプのみ保持
+            return { type: stroke.type };
+          });
+          detailedInfo.strokes = safeStrokes;
+        } catch (e) {
+          console.error('ストローク情報処理エラー:', e);
+        }
         
         if ('strokeWeight' in frameNode) {
           detailedInfo.strokeWeight = frameNode.strokeWeight;
@@ -550,10 +746,23 @@ function getDetailedNodeInfo(node: SceneNode): any {
       detailedInfo.text = {
         characters: textNode.characters,
         fontSize: textNode.fontSize,
-        fontName: textNode.fontName,
+        fontName: {
+          family: typeof textNode.fontName === 'object' && 'family' in textNode.fontName ? 
+            textNode.fontName.family : 'unknown',
+          style: typeof textNode.fontName === 'object' && 'style' in textNode.fontName ? 
+            textNode.fontName.style : 'unknown'
+        },
         fontWeight: textNode.fontWeight,
-        letterSpacing: textNode.letterSpacing,
-        lineHeight: textNode.lineHeight,
+        letterSpacing: typeof textNode.letterSpacing === 'object' && 'value' in textNode.letterSpacing ? 
+          { value: textNode.letterSpacing.value, unit: textNode.letterSpacing.unit } : 
+          textNode.letterSpacing,
+        lineHeight: typeof textNode.lineHeight === 'object' ? 
+          { 
+            // オブジェクトの内容を安全に抽出
+            ...(('value' in textNode.lineHeight) ? { value: textNode.lineHeight.value } : {}),
+            ...(('unit' in textNode.lineHeight) ? { unit: textNode.lineHeight.unit } : {})
+          } : 
+          textNode.lineHeight,
         paragraphIndent: textNode.paragraphIndent,
         paragraphSpacing: textNode.paragraphSpacing,
         textAlignHorizontal: textNode.textAlignHorizontal,
@@ -565,18 +774,78 @@ function getDetailedNodeInfo(node: SceneNode): any {
       
       // テキストスタイル
       if ('fills' in textNode && Array.isArray(textNode.fills)) {
-        detailedInfo.text.fills = textNode.fills;
+        try {
+          // 安全にfillsデータをコピー
+          const safeFills = textNode.fills.map(fill => {
+            if (fill.type === 'SOLID') {
+              return {
+                type: fill.type,
+                color: fill.color ? {
+                  r: fill.color.r,
+                  g: fill.color.g,
+                  b: fill.color.b
+                } : undefined,
+                opacity: fill.opacity
+              };
+            }
+            // その他のタイプのfillはタイプのみ保持
+            return { type: fill.type };
+          });
+          detailedInfo.text.fills = safeFills;
+        } catch (e) {
+          console.error('テキストfills情報処理エラー:', e);
+        }
       }
     }
     
     // ベクターノードの場合
     if (node.type === 'VECTOR' || node.type === 'LINE' || node.type === 'ELLIPSE' || node.type === 'POLYGON' || node.type === 'STAR' || node.type === 'RECTANGLE') {
       if ('fills' in node && Array.isArray(node.fills)) {
-        detailedInfo.fills = node.fills;
+        try {
+          // 安全にfillsデータをコピー
+          const safeFills = node.fills.map(fill => {
+            if (fill.type === 'SOLID') {
+              return {
+                type: fill.type,
+                color: fill.color ? {
+                  r: fill.color.r,
+                  g: fill.color.g,
+                  b: fill.color.b
+                } : undefined,
+                opacity: fill.opacity
+              };
+            }
+            // その他のタイプのfillはタイプのみ保持
+            return { type: fill.type };
+          });
+          detailedInfo.fills = safeFills;
+        } catch (e) {
+          console.error('fills情報処理エラー:', e);
+        }
       }
       
       if ('strokes' in node && Array.isArray(node.strokes)) {
-        detailedInfo.strokes = node.strokes;
+        try {
+          // 安全にストロークデータをコピー
+          const safeStrokes = node.strokes.map(stroke => {
+            if (stroke.type === 'SOLID') {
+              return {
+                type: stroke.type,
+                color: stroke.color ? {
+                  r: stroke.color.r,
+                  g: stroke.color.g,
+                  b: stroke.color.b
+                } : undefined,
+                opacity: stroke.opacity
+              };
+            }
+            // その他のタイプのストロークはタイプのみ保持
+            return { type: stroke.type };
+          });
+          detailedInfo.strokes = safeStrokes;
+        } catch (e) {
+          console.error('ストローク情報処理エラー:', e);
+        }
         
         if ('strokeWeight' in node) {
           detailedInfo.strokeWeight = node.strokeWeight;
@@ -600,8 +869,51 @@ function getDetailedNodeInfo(node: SceneNode): any {
         name: node.name
       };
       
-      if (node.type === 'INSTANCE' && 'componentId' in node) {
-        detailedInfo.component.componentId = node.componentId;
+      if (node.type === 'INSTANCE') {
+        const instanceNode = node as InstanceNode;
+        
+        // コンポーネントID情報
+        if ('componentId' in instanceNode) {
+          detailedInfo.component.componentId = instanceNode.componentId;
+        }
+        
+        // インスタンスの場合、元のコンポーネントの情報も安全に取得
+        if (instanceNode.mainComponent) {
+          try {
+            detailedInfo.component.mainComponent = {
+              id: instanceNode.mainComponent.id,
+              name: instanceNode.mainComponent.name,
+              type: instanceNode.mainComponent.type
+            };
+            
+            // 元のコンポーネントのサイズ情報
+            if (instanceNode.mainComponent.width && instanceNode.mainComponent.height) {
+              detailedInfo.component.mainComponent.width = instanceNode.mainComponent.width;
+              detailedInfo.component.mainComponent.height = instanceNode.mainComponent.height;
+            }
+          } catch (e) {
+            console.error('元コンポーネント情報取得エラー:', e);
+          }
+        }
+        
+        // インスタンスのプロパティリスト (variantProperties) を安全に取得
+        if ('componentProperties' in instanceNode && instanceNode.componentProperties) {
+          try {
+            const safeProperties: Record<string, any> = {};
+            
+            // プロパティを一つずつ安全に処理
+            Object.entries(instanceNode.componentProperties).forEach(([key, property]) => {
+              safeProperties[key] = {
+                type: property.type,
+                value: property.value
+              };
+            });
+            
+            detailedInfo.component.properties = safeProperties;
+          } catch (e) {
+            console.error('コンポーネントプロパティ処理エラー:', e);
+          }
+        }
       }
     }
     
@@ -1027,18 +1339,62 @@ figma.ui.onmessage = async (msg) => {
     try {
       const includeChildren = await figma.clientStorage.getAsync('include-children') || false;
       const includeImages = await figma.clientStorage.getAsync('include-images') || false;
-      const templateType = msg.templateType;
+      const templateType = msg.templateType as string;
       
+      // 選択されたアイテムがあるか確認
+      if (figma.currentPage.selection.length === 0) {
+        figma.notify('選択された要素がありません。Figmaで要素を選択してください。');
+        figma.ui.postMessage({
+          type: 'selection-with-template-type-result',
+          selection: [],
+          templateType: templateType,
+          error: '選択要素がありません'
+        });
+        return;
+      }
+      
+      // インスタンスが含まれているか確認
+      const hasInstances = figma.currentPage.selection.some(node => node.type === 'INSTANCE');
+      if (hasInstances) {
+        console.log('選択にインスタンスが含まれています。データを慎重に処理します。');
+      }
+      
+      // 選択情報を安全に取得
       const selectionInfo = await getSelectionInfo(includeChildren, includeImages, templateType);
       
+      // 成功結果を返す
       figma.ui.postMessage({
         type: 'selection-with-template-type-result',
         selection: selectionInfo,
         templateType: templateType
       });
     } catch (error) {
-      console.error('テンプレートタイプ付き選択情報取得エラー:', error);
-      figma.notify('選択情報の取得中にエラーが発生しました。' + error.message, { error: true });
+      // エラー処理を強化
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('テンプレートタイプ付き選択情報取得エラー:', errorMessage);
+      
+      // エラーの詳細情報を含むメッセージをユーザーに表示
+      let userMessage = '選択情報の取得中にエラーが発生しました。';
+      
+      // エラーの種類に基づいて追加情報を提供
+      if (errorMessage.includes('symbol') || errorMessage.includes('unwrap')) {
+        userMessage += ' コンポーネントインスタンスのデータを安全に処理できませんでした。';
+      }
+      
+      figma.notify(userMessage, { error: true, timeout: 5000 });
+      
+      // エラー情報をUIに送信
+      figma.ui.postMessage({
+        type: 'selection-with-template-type-result',
+        selection: figma.currentPage.selection.map(node => ({
+          id: node.id,
+          name: node.name,
+          type: node.type,
+          error: 'データ取得エラー'
+        })),
+        templateType: msg.templateType as string,
+        error: errorMessage
+      });
     }
   }
 }; 

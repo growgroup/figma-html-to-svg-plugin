@@ -3,6 +3,38 @@
 // Figmaプラグインのメインスレッド処理
 figma.showUI(__html__, { width: 550, height: 600 });
 
+// 選択要素を画像として書き出し、名前とデータを返す関数
+async function exportElementsAsImages(nodes: readonly SceneNode[]): Promise<Array<{id: string, name: string, data: string}>> {
+  const images = [];
+  
+  for (const node of nodes) {
+    try {
+      // 画像としてエクスポート
+      const bytes = await node.exportAsync({
+        format: 'PNG',
+        constraint: { type: 'SCALE', value: 2 }
+      });
+      
+      // Base64エンコード
+      const base64 = figma.base64Encode(bytes);
+      const data = `data:image/png;base64,${base64}`;
+      
+      // 安全なファイル名を生成
+      const safeName = node.name.replace(/[^\w\s]/gi, '_').trim() || 'image';
+      
+      images.push({
+        id: node.id,
+        name: `${safeName}.png`,
+        data
+      });
+    } catch (error) {
+      console.error(`Error exporting node ${node.name}:`, error);
+    }
+  }
+  
+  return images;
+}
+
 // デザイントークンの収集
 function collectDesignTokens() {
   // カラースタイル収集
@@ -299,7 +331,41 @@ async function exportSelectionAsImage(node: SceneNode): Promise<string | null> {
   }
 }
 
-// 選択要素の情報を取得
+// テキスト内容を再帰的に収集する関数
+async function collectTextContentRecursively(node: SceneNode): Promise<any> {
+  let result: any = {
+    name: node.name,
+    id: node.id,
+    type: node.type
+  };
+  
+  // テキストノードの場合はテキスト内容を直接取得
+  if (node.type === 'TEXT') {
+    try {
+      result.textContent = (node as TextNode).characters;
+    } catch (e) {
+      console.error('テキストコンテンツ取得エラー:', e);
+    }
+  }
+  
+  // 子要素を持つ場合は再帰的に処理
+  if ('children' in node) {
+    const childrenTexts: any[] = [];
+    for (const child of (node as FrameNode).children) {
+      const childText = await collectTextContentRecursively(child);
+      if (childText) {
+        childrenTexts.push(childText);
+      }
+    }
+    if (childrenTexts.length > 0) {
+      result.children = childrenTexts;
+    }
+  }
+  
+  return result;
+}
+
+// getSelectionInfo関数を修正して、リサーチモード用にテキスト情報を収集する処理を追加
 async function getSelectionInfo(includeChildren: boolean = false, includeImages: boolean = false, templateType?: string) {
   try {
     // エラーが起きそうな要素があるかチェック
@@ -379,6 +445,120 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
         };
       }
     });
+    
+    // リサーチモード用のテキスト情報を収集
+    if (templateType === 'research') {
+      try {
+        console.log('リサーチモード: テキスト情報を収集します');
+        
+        // テキスト内容の収集
+        const textPromises = figma.currentPage.selection.map(node => 
+          collectTextContentRecursively(node)
+        );
+        const textContents = await Promise.all(textPromises);
+        
+        // テキスト情報を含む拡張された選択情報
+        const extendedInfo = basicInfo.map((node, index) => ({
+          ...node,
+          allTextContent: textContents[index]
+        }));
+        
+        // 階層情報を含める場合
+        if (includeChildren) {
+          try {
+            const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+            
+            // 基本情報と階層情報を結合
+            const combinedInfo = extendedInfo.map((baseNode, index) => ({
+              ...baseNode,
+              hierarchy: hierarchyInfo[index]
+            }));
+            
+            // 画像も含める場合
+            if (includeImages) {
+              try {
+                const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+                const images = await Promise.all(imagePromises);
+                
+                const result = combinedInfo.map((node, index) => ({
+                  ...node,
+                  imageData: images[index]
+                }));
+                
+                // JSON.stringifyとJSO.parseでシリアライズ可能なデータだけを確実に返す
+                return JSON.parse(JSON.stringify(result, (key, value) => {
+                  // Base64の画像データは特別に処理（そのまま保持）
+                  if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+                    return value;
+                  }
+                  // Symbolはnullに変換
+                  if (typeof value === 'symbol') {
+                    return null;
+                  }
+                  return value;
+                }));
+              } catch (error) {
+                console.error('画像含む階層情報取得エラー:', error);
+                return combinedInfo;
+              }
+            }
+            
+            // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す
+            return JSON.parse(JSON.stringify(combinedInfo, (key, value) => {
+              // Symbolはnullに変換
+              if (typeof value === 'symbol') {
+                return null;
+              }
+              return value;
+            }));
+          } catch (error) {
+            console.error('階層情報処理エラー:', error);
+            return extendedInfo;
+          }
+        }
+        
+        // 画像のみ含める場合
+        if (includeImages) {
+          try {
+            const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+            const images = await Promise.all(imagePromises);
+            
+            const result = extendedInfo.map((node, index) => ({
+              ...node,
+              imageData: images[index]
+            }));
+            
+            // JSON.stringifyとJSON.parseでシリアライズ可能なデータだけを返す（画像データは保持）
+            return JSON.parse(JSON.stringify(result, (key, value) => {
+              // Base64の画像データは特別に処理（そのまま保持）
+              if (key === 'imageData' && typeof value === 'string' && value.startsWith('data:image')) {
+                return value;
+              }
+              // Symbolはnullに変換
+              if (typeof value === 'symbol') {
+                return null;
+              }
+              return value;
+            }));
+          } catch (error) {
+            console.error('画像情報処理エラー:', error);
+            return extendedInfo;
+          }
+        }
+        
+        // 拡張情報のみ返す
+        return JSON.parse(JSON.stringify(extendedInfo, (key, value) => {
+          // Symbolはnullに変換
+          if (typeof value === 'symbol') {
+            return null;
+          }
+          return value;
+        }));
+      } catch (error) {
+        console.error('テキスト情報収集エラー:', error);
+        // エラーの場合は通常の処理に戻る
+      }
+    }
     
     // コーディング用の詳細情報を取得
     if (templateType === 'coding') {
@@ -973,6 +1153,67 @@ function getNodeInfoRecursiveWithStyles(node: SceneNode): any {
   }
 }
 
+// ヘルパー関数: すべての可視レイヤーを取得
+function getAllVisibleLayers(): SceneNode[] {
+  const layers: SceneNode[] = [];
+  
+  function traverse(node: BaseNode) {
+    if ('visible' in node && node.visible && 'id' in node) {
+      layers.push(node as SceneNode);
+    }
+    
+    if ('children' in node) {
+      (node.children as BaseNode[]).forEach(child => traverse(child));
+    }
+  }
+  
+  // 現在のページのすべてのノードをトラバース
+  figma.currentPage.children.forEach(child => traverse(child));
+  
+  return layers;
+}
+
+// ヘルパー関数: 特定ノードのSelectionInfo取得
+async function getSelectionInfoForNode(node: SceneNode, includeChildren: boolean = false, includeImages: boolean = false) {
+  // 選択したノードを含む配列を作成
+  const tempSelection = [node];
+  
+  // 既存のgetSelectionInfo関数と似た処理を行う
+  const result = [];
+  
+  for (const node of tempSelection) {
+    const nodeInfo: any = {
+      id: node.id,
+      name: node.name,
+      type: node.type
+    };
+    
+    // 基本プロパティを追加
+    if ('width' in node && 'height' in node) {
+      nodeInfo.width = node.width;
+      nodeInfo.height = node.height;
+    }
+    
+    // includeChildrenが有効な場合、子ノード情報も取得
+    if (includeChildren && 'children' in node) {
+      nodeInfo.children = getDetailedNodeInfo(node);
+    }
+    
+    // includeImagesが有効な場合、画像データも取得
+    if (includeImages) {
+      try {
+        nodeInfo.imageData = await exportSelectionAsImage(node);
+      } catch (error) {
+        console.error('画像エクスポートエラー:', error);
+      }
+    }
+    
+    result.push(nodeInfo);
+  }
+  
+  return result;
+}
+
 // 選択変更時のイベント
 figma.on('selectionchange', async () => {
   try {
@@ -1334,12 +1575,107 @@ figma.ui.onmessage = async (msg) => {
         codingPrompt: 'FLOCSS'
       });
     }
+  } else if (msg.type === 'get-layers-list') {
+    try {
+      // ドキュメント内の表示レイヤーを取得
+      const layers = getAllVisibleLayers();
+      
+      // レイヤー情報を返す
+      figma.ui.postMessage({
+        type: 'layers-list-result',
+        success: true,
+        layers: layers.map(layer => ({
+          id: layer.id,
+          name: layer.name,
+          type: layer.type
+        }))
+      });
+    } catch (error) {
+      figma.ui.postMessage({
+        type: 'layers-list-result',
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  } else if (msg.type === 'get-layer-selection-info') {
+    try {
+      const layerId = msg.layerId;
+      const node = figma.getNodeById(layerId);
+      
+      if (!node) {
+        throw new Error(`Layer with ID ${layerId} not found`);
+      }
+      
+      // 指定されたノードが SceneNode の場合のみ処理
+      if ('type' in node) {
+        const sceneNode = node as SceneNode;
+        
+        // レイヤー情報の取得
+        const selectionInfo = await getSelectionInfoForNode(sceneNode, msg.includeChildren, msg.includeImages);
+        
+        figma.ui.postMessage({
+          type: 'layer-selection-info-result',
+          success: true,
+          layerId,
+          selectionInfo
+        });
+      } else {
+        throw new Error(`Node with ID ${layerId} is not a SceneNode`);
+      }
+    } catch (error) {
+      figma.ui.postMessage({
+        type: 'layer-selection-info-result',
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  } else if (msg.type === 'export-elements-as-images') {
+    try {
+      // 指定されたノードIDを使用してノードを取得
+      const nodes = msg.nodeIds.map((id: string) => figma.getNodeById(id)).filter((node: BaseNode | null): node is SceneNode => node !== null && 'exportAsync' in node) as SceneNode[];
+      
+      if (nodes.length === 0) {
+        figma.ui.postMessage({
+          type: 'export-images-result',
+          success: false,
+          error: 'No valid nodes found'
+        });
+        return;
+      }
+      
+      // 画像としてエクスポート（新しい方法）
+      console.log(`Processing ${nodes.length} layers for image extraction`);
+      const images = await exportImageNodesFromLayers(nodes);
+      console.log(`Extracted ${images.length} images from layers`);
+      
+      // 結果を返す
+      figma.ui.postMessage({
+        type: 'export-images-result',
+        success: true,
+        images
+      });
+    } catch (error) {
+      console.error('Error exporting images:', error);
+      figma.ui.postMessage({
+        type: 'export-images-result',
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   } else if (msg.type === 'get-selection-with-template-type') {
     // テンプレートタイプを指定して選択情報を取得
     try {
-      const includeChildren = await figma.clientStorage.getAsync('include-children') || false;
-      const includeImages = await figma.clientStorage.getAsync('include-images') || false;
+      // 保存された値を取得
+      const savedIncludeChildren = await figma.clientStorage.getAsync('include-children') || false;
+      const savedIncludeImages = await figma.clientStorage.getAsync('include-images') || false;
+      
+      // メッセージからの値がある場合はそれを優先、なければ保存された値を使用
+      const includeChildren = msg.includeChildren !== undefined ? msg.includeChildren : savedIncludeChildren;
+      const includeImages = msg.includeImages !== undefined ? msg.includeImages : savedIncludeImages;
+      
       const templateType = msg.templateType as string;
+      
+      console.log(`選択情報の取得: テンプレートタイプ=${templateType}, 子要素を含む=${includeChildren}, 画像を含む=${includeImages}`);
       
       // 選択されたアイテムがあるか確認
       if (figma.currentPage.selection.length === 0) {
@@ -1396,5 +1732,156 @@ figma.ui.onmessage = async (msg) => {
         error: errorMessage
       });
     }
+  } else if (msg.type === 'get-single-element-info') {
+    // 特定の要素のみの情報を取得
+    try {
+      const elementId = msg.elementId;
+      const node = figma.getNodeById(elementId);
+      
+      if (!node || !('type' in node)) {
+        console.error(`要素ID ${elementId} が見つからないか、有効なSceneNodeではありません`);
+        figma.ui.postMessage({
+          type: 'single-element-info-result',
+          elementId: elementId,
+          elementInfo: null,
+          error: '要素が見つかりません'
+        });
+        return;
+      }
+      
+      console.log(`要素 ${node.name} (${node.id}) の詳細情報を取得します`);
+      
+      // メッセージからの値がある場合はそれを優先、なければ保存された値を使用
+      const includeChildren = msg.includeChildren !== undefined ? msg.includeChildren : true;
+      const includeImages = msg.includeImages !== undefined ? msg.includeImages : true;
+      const templateType = msg.templateType as string;
+      
+      // 選択情報を取得
+      const sceneNode = node as SceneNode;
+      const selectionInfo = await getSelectionInfoForNode(sceneNode, includeChildren, includeImages);
+      
+      // テキスト情報を収集
+      if (templateType === 'research') {
+        const textContent = await collectTextContentRecursively(sceneNode);
+        
+        // 選択情報にテキスト情報を追加
+        if (selectionInfo && selectionInfo.length > 0) {
+          selectionInfo[0].allTextContent = textContent;
+        }
+      }
+      
+      // 結果を返す
+      figma.ui.postMessage({
+        type: 'single-element-info-result',
+        elementId: elementId,
+        elementInfo: selectionInfo && selectionInfo.length > 0 ? selectionInfo[0] : null
+      });
+    } catch (error) {
+      // エラー処理
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`要素情報取得エラー: ${errorMessage}`);
+      figma.ui.postMessage({
+        type: 'single-element-info-result',
+        elementId: msg.elementId,
+        elementInfo: null,
+        error: errorMessage
+      });
+    }
   }
-}; 
+};
+
+// レイヤー内の画像ノードを再帰的に探索する関数
+async function findImageNodesInLayer(node: SceneNode): Promise<Array<{node: SceneNode, reason: string}>> {
+  const imageNodes: Array<{node: SceneNode, reason: string}> = [];
+  
+  // このノード自体が画像タイプかチェック
+  if (node.type === 'RECTANGLE' || node.type === 'ELLIPSE' || node.type === 'POLYGON' || node.type === 'STAR' || node.type === 'VECTOR' || node.type === 'FRAME') {
+    const hasImageFill = 'fills' in node && Array.isArray(node.fills) && 
+                          node.fills.some(fill => fill.type === 'IMAGE' && fill.visible !== false);
+    
+    if (hasImageFill) {
+      imageNodes.push({
+        node,
+        reason: 'IMAGE_FILL'
+      });
+    }
+  }
+  
+  // 他の画像タイプのノード (IMAGE直接の型がなくても互換性を維持)
+  if ('type' in node && (node as any).type === 'IMAGE') {
+    imageNodes.push({
+      node,
+      reason: 'IMAGE_NODE'
+    });
+  }
+  
+  // 子要素を持つノードなら再帰的に処理
+  if ('children' in node) {
+    for (const child of node.children) {
+      const childImageNodes = await findImageNodesInLayer(child as SceneNode);
+      imageNodes.push(...childImageNodes);
+    }
+  }
+  
+  return imageNodes;
+}
+
+// 選択レイヤー内の画像ノードをエクスポートする新しい関数
+async function exportImageNodesFromLayers(nodes: readonly SceneNode[]): Promise<Array<{id: string, name: string, data: string, nodeId: string}>> {
+  const allImages: Array<{id: string, name: string, data: string, nodeId: string}> = [];
+  
+  for (const node of nodes) {
+    try {
+      // レイヤー内の画像を検索
+      const imageNodes = await findImageNodesInLayer(node);
+      
+      if (imageNodes.length === 0) {
+        // 画像が見つからない場合はレイヤー自体をエクスポート（従来の動作）
+        const bytes = await node.exportAsync({
+          format: 'PNG',
+          constraint: { type: 'SCALE', value: 2 }
+        });
+        
+        const base64 = figma.base64Encode(bytes);
+        const data = `data:image/png;base64,${base64}`;
+        const safeName = node.name.replace(/[^\w\s]/gi, '_').trim() || 'image';
+        
+        allImages.push({
+          id: figma.createNodeFromJSXAsync ? figma.createNodeFromJSXAsync.toString() + '_' + Math.random().toString(36).substring(2, 11) : Math.random().toString(36).substring(2, 11),
+          name: `${safeName}.png`,
+          data,
+          nodeId: node.id
+        });
+      } else {
+        // 発見した画像ノードをエクスポート
+        for (const [index, imageNode] of imageNodes.entries()) {
+          const exportNode = imageNode.node;
+          const bytes = await exportNode.exportAsync({
+            format: 'PNG',
+            constraint: { type: 'SCALE', value: 2 }
+          });
+          
+          const base64 = figma.base64Encode(bytes);
+          const data = `data:image/png;base64,${base64}`;
+          
+          // ノード名からファイル名を生成（複数ある場合はインデックスを追加）
+          let safeName = exportNode.name.replace(/[^\w\s]/gi, '_').trim();
+          if (!safeName) {
+            safeName = `image_${index}`;
+          }
+          
+          allImages.push({
+            id: exportNode.id,
+            name: `${safeName}.png`,
+            data,
+            nodeId: node.id // 元のレイヤーIDも保持
+          });
+        }
+      }
+    } catch (error) {
+      console.error(`Error processing node ${node.name}:`, error);
+    }
+  }
+  
+  return allImages;
+} 

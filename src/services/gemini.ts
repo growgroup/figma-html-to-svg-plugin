@@ -140,6 +140,19 @@ function getSpecificInstructions(templateType: TemplateType): string {
       - 簡単なアイコンなどSVGで再現できるものはSVGをコーディングしてください。
       - HTMLコメントやCSSコメントは一切不要です。
       `;
+    case 'research':
+      return `
+      このリクエストはリサーチ分析用途です。Figmaで選択した要素のデザインとユーザープロンプトを分析し、マークダウン形式で出力してください。
+      
+      以下の点に注意してください：
+      - アップロードされた画像とデザイン情報を詳細に分析すること
+      - HTMLコードではなく、マークダウン形式の分析レポートを返すこと
+      - レポートは構造化され、見出し、リスト、表などを適切に使用すること
+      - ユーザープロンプトで指定された観点から分析を行うこと
+      - 具体的で実用的な提案や分析結果を含めること
+      
+      レスポンスはマークダウン形式のテキストのみを返してください。HTMLやコードブロックは使用しないでください。
+      `;
     default:
       return '';
   }
@@ -175,6 +188,46 @@ function extractImagesFromSelection(selectedElements: SelectionInfo[]): string[]
   }
   
   return images;
+}
+
+// 選択要素のテキスト情報を抽出してマークダウン形式で整形する関数
+function extractTextContentInfo(elements: SelectionInfo[]): string {
+  if (!elements || elements.length === 0) {
+    return '選択要素のテキスト情報はありません。';
+  }
+  
+  let result = '';
+  
+  // テキストデータを再帰的に処理する関数
+  const processTextContent = (content: any, indent: number = 0): void => {
+    if (!content) return;
+    
+    const indentStr = '  '.repeat(indent);
+    
+    // 名前とタイプを出力
+    result += `${indentStr}- **${content.name}** (${content.type})\n`;
+    
+    // テキスト内容があれば出力
+    if (content.textContent) {
+      result += `${indentStr}  「${content.textContent}」\n`;
+    }
+    
+    // 子要素を再帰的に処理
+    if (content.children && Array.isArray(content.children)) {
+      content.children.forEach((child: any) => {
+        processTextContent(child, indent + 1);
+      });
+    }
+  };
+  
+  // 各要素のテキスト情報を処理
+  elements.forEach(element => {
+    if (element.allTextContent) {
+      processTextContent(element.allTextContent);
+    }
+  });
+  
+  return result || '抽出可能なテキスト情報はありませんでした。';
 }
 
 // 選択要素のコピーを作成し、画像データを除外する関数
@@ -263,6 +316,24 @@ export async function callAIAPI(
   
   レスポンスはHTMLコードのみを返してください。
   `;
+  
+  // リサーチモードの場合、テキスト情報を含める
+  if (templateType === 'research') {
+    const textInfo = extractTextContentInfo(cleanedSelectedElements);
+    
+    promptContent = `
+  # ユーザープロンプト
+  ${userPrompt}
+  
+  # Figma要素のテキスト情報
+  ${textInfo}
+  
+  # 指示
+  上記の情報とテキスト内容、およびアップロードされた画像をもとに、マークダウン形式で分析レポートを作成してください。
+  
+  ${specificInstructions}
+  `;
+  }
   
   // コーディングモードの場合、詳細なスタイル情報を強調
   if (templateType === 'coding') {
@@ -486,12 +557,7 @@ export async function generateImageWithGemini(
       contents: [],
       generationConfig: {
         responseModalities: ["Text", "Image"]
-      },
-      tools: [
-        {
-          google_search: {}
-        }
-      ]
+      }
     };
     
     // 以前のメッセージがある場合は追加
@@ -583,5 +649,239 @@ export async function generateImageWithGemini(
   } catch (error) {
     console.error('画像生成エラー:', error);
     throw new Error(`画像生成エラー: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// 単一要素を処理する関数
+export async function processSingleElement(
+  apiKey: string,
+  modelId: string,
+  designTokens: DesignTokens | null,
+  contextPrompt: string,
+  elementInfo: SelectionInfo[],
+  researchType: string
+): Promise<string> {
+  // モデルIDからモデル情報を取得
+  const customModel = modelId.includes('/') 
+    ? { id: modelId, name: 'Custom Model', provider: 'openrouter', apiEndpoint: 'https://openrouter.ai/api/v1/chat/completions' } as AIModel
+    : null;
+  
+  const model = DEFAULT_MODELS.find(m => m.id === modelId) || customModel;
+  
+  if (!model) {
+    throw new Error(`モデル "${modelId}" が見つかりません`);
+  }
+
+  // 選択要素から画像データを抽出
+  const imageDataArray = extractImagesFromSelection(elementInfo);
+  console.log(`要素から抽出された画像データ: ${imageDataArray.length}件`);
+  
+  // 選択要素から画像データを除外したコピーを作成
+  const cleanedElementInfo = removeImageDataFromSelection(elementInfo);
+
+  // テキスト情報を抽出
+  const textInfo = extractTextContentInfo(cleanedElementInfo);
+  
+  // リサーチタイプに応じたシステムメッセージを設定
+  let systemMessage = '';
+  switch (researchType) {
+    case 'coding':
+      systemMessage = `
+      あなたはFigmaデザインからコーディング計画を作成する専門家です。提供されたデザイン要素の情報と画像を分析し、
+      HTMLとCSSで効率的に実装するための計画をマークダウン形式で作成してください。
+      `;
+      break;
+    case 'wordpress':
+      systemMessage = `
+      あなたはFigmaデザインからWordPress実装計画を作成する専門家です。提供されたデザイン要素の情報と画像を分析し、
+      WordPressサイトの設計書をマークダウン形式で作成してください。
+      固定ページ、カスタム投稿タイプ、タクソノミー、カスタムフィールドの設計を詳細に行ってください。
+      `;
+      break;
+    case 'typo':
+      systemMessage = `
+      あなたはテキスト品質評価の専門家です。提供されたデザイン要素のテキストを詳細に分析し、
+      誤字脱字、表現の一貫性、読みやすさなどの観点から品質を評価し、改善提案をマークダウン形式で作成してください。
+      言語表現に関する専門知識を活かし、具体的かつ実用的な提案を行ってください。
+      `;
+      break;
+    case 'design':
+      systemMessage = `
+      あなたはUI/UXデザインレビューの専門家です。提供されたデザイン要素を詳細に分析し、
+      視覚的デザイン、インタラクション、一貫性、使いやすさなどの観点から評価し、
+      具体的な改善提案をマークダウン形式で作成してください。
+      モダンなUI/UXデザインの原則と最新のトレンドを考慮した評価を行ってください。
+      `;
+      break;
+    default:
+      systemMessage = `
+      あなたはFigmaデザインの分析専門家です。提供されたデザイン要素の情報と画像を分析し、マークダウン形式でレポートを作成してください。
+      `;
+  }
+  
+  // テキスト情報の重要度調整
+  let textInfoSection = '';
+  if (researchType === 'typo') {
+    // 誤字脱字チェックの場合はテキスト情報を強調
+    textInfoSection = `
+# Figma要素のテキスト情報（重要）
+以下のテキストを詳細に分析し、品質評価を行ってください：
+
+${textInfo}
+    `;
+  } else {
+    // 通常のテキスト情報セクション
+    textInfoSection = `
+# Figma要素のテキスト情報
+${textInfo}
+    `;
+  }
+  
+  // プロンプト構築
+  let promptContent = `
+# 単一要素の分析
+${contextPrompt}
+
+${textInfoSection}
+
+# 指示
+上記の要素情報とテキスト内容、およびアップロードされた画像をもとに、マークダウン形式の分析を行ってください。
+前回までの分析結果がある場合は、それと統合した最終的なレポートを作成してください。
+
+マークダウン形式で出力し、情報を整理してください。
+`;
+
+  try {
+    let response;
+    let responseText;
+    
+    // モデルプロバイダーに応じたAPI呼び出し
+    if (model.provider === 'gemini') {
+      // Gemini API用のリクエスト本文を構築
+      const requestBody: any = {
+        contents: [{
+          parts: [
+            {
+              text: promptContent
+            }
+          ]
+        }]
+      };
+      
+      // 既存画像データがある場合は追加
+      if (imageDataArray.length > 0) {
+        // テキストパーツはすでに追加済み
+        // 画像パーツを追加
+        imageDataArray.forEach(imageData => {
+          // Base64データのプレフィックスを削除（MIMEタイプは保持）
+          const base64Data = imageData.split(',')[1];
+          const mimeType = (imageData.match(/data:([^;]+);/) || [])[1] || 'image/png';
+          
+          requestBody.contents[0].parts.push({
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data
+            }
+          });
+        });
+      }
+      
+      // Gemini API呼び出し
+      response = await fetch(`${model.apiEndpoint}?key=${apiKey}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`API Error: ${errorData.error?.message || response.statusText}`);
+      }
+      
+      const data = await response.json();
+      responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+    } else if (model.provider === 'openrouter') {
+      // OpenRouter用のリクエスト本文を構築
+      const requestBody: any = {
+        model: model.id,
+        max_tokens: 4000,
+        messages: [
+          {
+            role: 'system',
+            content: systemMessage
+          }
+        ]
+      };
+      
+      // ユーザーメッセージを作成
+      if (imageDataArray.length > 0) {
+        // 画像がある場合は配列形式のコンテンツを使用
+        const userContent: any[] = [
+          {
+            type: 'text',
+            text: promptContent
+          }
+        ];
+        
+        // 画像をコンテンツに追加
+        imageDataArray.forEach(imageData => {
+          userContent.push({
+            type: 'image_url',
+            image_url: {
+              url: imageData // Base64 URL形式を直接使用
+            }
+          });
+        });
+        
+        // ユーザーメッセージを追加
+        requestBody.messages.push({
+          role: 'user',
+          content: userContent
+        });
+      } else {
+        // 画像がない場合は通常のテキストメッセージ
+        requestBody.messages.push({
+          role: 'user',
+          content: promptContent
+        });
+      }
+      
+      console.log('OpenRouter Request for element:', JSON.stringify(requestBody, null, 2));
+      
+      // OpenRouter API呼び出し
+      response = await fetch(model.apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://figma.com', // OpenRouterでは必須
+          'X-Title': 'Figma HTML to SVG Generator'
+        },
+        body: JSON.stringify(requestBody)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`OpenRouter API Error: ${errorData.error?.message || response.statusText}`);
+      }
+      
+      const data = await response.json();
+      responseText = data.choices?.[0]?.message?.content;
+    } else {
+      throw new Error(`未サポートのプロバイダー: ${model.provider}`);
+    }
+    
+    if (!responseText) {
+      throw new Error('APIからレポートが返されませんでした');
+    }
+    
+    // 既にマークダウン形式で返ってくるはずなので、そのまま返す
+    return responseText;
+  } catch (error) {
+    console.error('単一要素処理エラー:', error);
+    throw new Error(`Element API Error: ${error instanceof Error ? error.message : String(error)}`);
   }
 } 

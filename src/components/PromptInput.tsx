@@ -1,12 +1,16 @@
 import * as React from 'react';
+import { SelectionInfo } from '../utils/types';
+import LayerSelector from './LayerSelector';
 
-export type TemplateType = 'webdesign' | 'presentation' | 'diagram' | 'wireframe' | 'coding';
+export type TemplateType = 'webdesign' | 'presentation' | 'diagram' | 'wireframe' | 'coding' | 'research';
 
 // 単一プロンプトの型定義
 export interface PromptItem {
   id: string;
   content: string;
   title: string;
+  selectedLayerId?: string; // 選択したFigmaレイヤーのID
+  selectionInfo?: SelectionInfo[]; // レイヤーの詳細情報
 }
 
 interface PromptInputProps {
@@ -38,6 +42,70 @@ const PromptInput: React.FC<PromptInputProps> = ({
   onBatchModeChange
 }) => {
   const [showExamples, setShowExamples] = React.useState(false);
+  
+  // レイヤー選択モーダルの状態
+  const [showLayerSelector, setShowLayerSelector] = React.useState(false);
+  const [currentEditingPromptId, setCurrentEditingPromptId] = React.useState<string | null>(null);
+  const [availableLayers, setAvailableLayers] = React.useState<Array<{id: string, name: string, type: string}>>([]);
+  const [isLoadingLayers, setIsLoadingLayers] = React.useState(false);
+  
+  // レイヤー選択ハンドラー
+  const handleSelectLayerForPrompt = (promptId: string) => {
+    setCurrentEditingPromptId(promptId);
+    setShowLayerSelector(true);
+    
+    // レイヤー一覧を取得
+    setIsLoadingLayers(true);
+    parent.postMessage(
+      { pluginMessage: { type: 'get-layers-list' } },
+      '*'
+    );
+  };
+  
+  // レイヤー一覧受信ハンドラー
+  React.useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const message = event.data.pluginMessage;
+      if (!message) return;
+      
+      if (message.type === 'layers-list-result') {
+        setIsLoadingLayers(false);
+        if (message.success) {
+          setAvailableLayers(message.layers);
+        } else {
+          console.error('レイヤー一覧取得エラー:', message.error);
+        }
+      }
+    };
+    
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+  
+  // レイヤー選択確定ハンドラー
+  const handleLayerSelect = (layerId: string) => {
+    if (!currentEditingPromptId) return;
+    
+    const updatedItems = promptItems.map(item => {
+      if (item.id === currentEditingPromptId) {
+        return {
+          ...item,
+          selectedLayerId: layerId
+        };
+      }
+      return item;
+    });
+    
+    onPromptItemsChange(updatedItems);
+    setShowLayerSelector(false);
+    setCurrentEditingPromptId(null);
+  };
+  
+  // レイヤー名取得ヘルパー
+  const getLayerNameById = (layerId: string) => {
+    const layer = availableLayers.find(l => l.id === layerId);
+    return layer ? layer.name : layerId;
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,6 +185,12 @@ const PromptInput: React.FC<PromptInputProps> = ({
           'お問い合わせフォームをレスポンシブ対応でコーディングしてください。名前、メール、電話番号、お問い合わせ内容の入力欄を含みます。',
           'ニュースサイトのヘッダー部分をコーディングしてください。ロゴ、メインナビゲーション、検索バー、ログインボタンを含みます。'
         ];
+      case 'research':
+        return [
+          '研究のためのプロンプトを入力してください...',
+          '研究のためのプロンプトを入力してください...',
+          '研究のためのプロンプトを入力してください...'
+        ];
       default:
         return [];
     }
@@ -187,6 +261,18 @@ const PromptInput: React.FC<PromptInputProps> = ({
               className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
             />
             <span className="text-sm text-gray-700">コーディング</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="radio"
+              name="templateType"
+              value="research"
+              checked={templateType === 'research'}
+              onChange={() => onTemplateTypeChange('research')}
+              disabled={disabled}
+              className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">研究</span>
           </label>
         </div>
         
@@ -316,6 +402,29 @@ const PromptInput: React.FC<PromptInputProps> = ({
                     rows={3}
                     className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60 disabled:bg-gray-100"
                   />
+
+                  {/* レイヤー選択UI（コーディングモードのみ表示） */}
+                  {templateType === 'coding' && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectLayerForPrompt(item.id)}
+                        disabled={disabled}
+                        className="px-2 py-1 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 rounded transition-colors flex items-center gap-1"
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                          <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                        </svg>
+                        <span>{item.selectedLayerId ? 'レイヤー選択済み' : 'レイヤーを選択'}</span>
+                      </button>
+                      {item.selectedLayerId && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          選択レイヤー: {getLayerNameById(item.selectedLayerId)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -332,6 +441,19 @@ const PromptInput: React.FC<PromptInputProps> = ({
           {disabled ? '生成中...' : (isBatchMode ? '一括生成開始' : 'HTML生成 & SVG変換')}
         </button>
       </div>
+
+      {/* レイヤー選択モーダル */}
+      <LayerSelector
+        isOpen={showLayerSelector}
+        onClose={() => {
+          setShowLayerSelector(false);
+          setCurrentEditingPromptId(null);
+        }}
+        onSelect={handleLayerSelect}
+        layers={availableLayers}
+        isLoading={isLoadingLayers}
+        selectedLayerId={currentEditingPromptId ? promptItems.find(item => item.id === currentEditingPromptId)?.selectedLayerId : undefined}
+      />
     </form>
   );
 };
@@ -349,6 +471,8 @@ const getPlaceholderByType = (type: TemplateType): string => {
       return 'ワイヤーフレーム/構成ラフの内容を説明してください...';
     case 'coding':
       return 'コーディングしたい要素や画面の詳細を説明してください...';
+    case 'research':
+      return '研究のためのプロンプトを入力してください...';
     default:
       return 'HTMLを生成するためのプロンプトを入力してください...';
   }

@@ -54,6 +54,23 @@ export interface SelectionInfo {
   [key: string]: any;
 }
 
+export interface CodeGenerationOptions {
+  addPrefix: boolean;
+  prefix: string;
+  useBEM: boolean;
+  mergeCss: boolean;
+}
+
+export interface GeneratedItem {
+  id: string;
+  html: string;
+  css?: string;
+  svg?: string;
+  fullContent?: string;
+  width: number;
+  height: number;
+}
+
 // Figma API型定義
 export interface FontName {
   family: string;

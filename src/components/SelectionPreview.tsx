@@ -7,6 +7,45 @@ interface SelectionPreviewProps {
 
 const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
   const [expandedItems, setExpandedItems] = React.useState<Record<string, boolean>>({});
+  const [copyStatus, setCopyStatus] = React.useState<string>('');
+
+  // JSONをコピーする関数
+  const copySelectionToClipboard = () => {
+    try {
+      console.log(selection)
+      const jsonString = JSON.stringify(selection, null, 2);
+      
+      // テキストエリアを作成し、JSONをセット
+      const textArea = document.createElement('textarea');
+      textArea.value = jsonString;
+      
+      // テキストエリアをDOMに追加（見えないように設定）
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      
+      // テキストを選択してコピー
+      textArea.focus();
+      textArea.select();
+      
+      const success = document.execCommand('copy');
+      
+      // テキストエリアを削除
+      document.body.removeChild(textArea);
+      
+      if (success) {
+        setCopyStatus('コピーしました');
+        // 3秒後にステータスをクリア
+        setTimeout(() => setCopyStatus(''), 3000);
+      } else {
+        setCopyStatus('コピーに失敗しました');
+      }
+    } catch (error) {
+      console.error('JSONの生成に失敗しました:', error);
+      setCopyStatus('JSONの生成に失敗しました');
+    }
+  };
 
   if (!selection.length) {
     return (
@@ -46,7 +85,19 @@ const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
 
   return (
     <div className="selection-preview">
-      <h3 className="text-sm font-bold text-gray-800">選択要素 ({selection.length})</h3>
+      <div className="selection-header-with-actions">
+        <h3 className="text-sm font-bold text-gray-800">選択要素 ({selection.length})</h3>
+        <div className="selection-actions">
+          <button 
+            className="copy-json-button"
+            onClick={copySelectionToClipboard}
+            title="選択要素のJSONをクリップボードにコピーします"
+          >
+            JSONをコピー
+          </button>
+          {copyStatus && <span className="copy-status">{copyStatus}</span>}
+        </div>
+      </div>
       <div className="selection-list">
         {selection.map((item) => (
           <div key={item.id} className="selection-item">
@@ -101,9 +152,42 @@ const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
           border-radius: 4px;
         }
         
+        .selection-header-with-actions {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 10px;
+        }
+        
+        .selection-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .copy-json-button {
+          background-color: #0066ff;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 4px 8px;
+          font-size: 12px;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        }
+        
+        .copy-json-button:hover {
+          background-color: #0055dd;
+        }
+        
+        .copy-status {
+          font-size: 12px;
+          color: #0066ff;
+        }
+        
         .selection-preview h3 {
           margin-top: 0;
-          margin-bottom: 10px;
+          margin-bottom: 0;
         }
         
         .no-selection {

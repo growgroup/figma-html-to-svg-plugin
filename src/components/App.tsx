@@ -4,13 +4,18 @@ import SelectionPreview from './SelectionPreview';
 import TokenDisplay from './TokenDisplay';
 import SVGPreview from './SVGPreview';
 import ProgressIndicator from './ProgressIndicator';
-import { callAIAPI, DEFAULT_MODELS, generateImageWithGemini } from '../services/gemini';
+import SettingsTab from './SettingsTab';
+import ImageGenerationTab from './ImageGenerationTab';
+import { useImageGeneration } from '../hooks/useImageGeneration';
+import { callAIAPI, DEFAULT_MODELS } from '../services/gemini';
 import { convertHtmlToSvg } from '../services/converter';
-import { DesignTokens, SelectionInfo } from '../utils/types';
+import { DesignTokens, SelectionInfo, CodeGenerationOptions } from '../utils/types';
+import { createAndDownloadZip, processHtmlWithPrefixes, extractImagesFromSelection, updateHtmlWithImagePaths, mergeCssFiles } from '../utils/codeHelper';
 import JSZip from 'jszip';
+import ResearchTab from './ResearchTab';
 
 // メインタブの状態型を拡張
-type MainTabType = 'generation' | 'tokens' | 'settings' | 'image-generation';
+type MainTabType = 'generation' | 'tokens' | 'settings' | 'image-generation' | 'research';
 
 const App: React.FC = () => {
   const [designTokens, setDesignTokens] = React.useState<DesignTokens | null>(null);
@@ -53,16 +58,12 @@ const App: React.FC = () => {
   // HTMLコーディング用のプロンプト設定
   const [codingPrompt, setCodingPrompt] = React.useState('FLOCSS');
   
-  // 画像生成関連の状態変数
-  const [imagePrompt, setImagePrompt] = React.useState('');
-  const [generatedImage, setGeneratedImage] = React.useState<string | null>(null);
-  const [imageAspectRatio, setImageAspectRatio] = React.useState('1:1');
-  const [isGeneratingImage, setIsGeneratingImage] = React.useState(false);
-  const [imageGenerationError, setImageGenerationError] = React.useState('');
-  
-  // チャット会話履歴
-  const [chatMessages, setChatMessages] = React.useState<Array<{role: 'user' | 'model', content: string}>>([]);
-  const [showChatInterface, setShowChatInterface] = React.useState(false);
+  // コーディングモード専用の直接出力設定
+  const [directCodeOutput, setDirectCodeOutput] = React.useState<boolean>(false);
+  const [codePrefix, setCodePrefix] = React.useState<string>('component');
+  const [addCodePrefix, setAddCodePrefix] = React.useState<boolean>(true);
+  const [useBEMNotation, setUseBEMNotation] = React.useState<boolean>(true);
+  const [mergeCssInBatch, setMergeCssInBatch] = React.useState<boolean>(true);
   
   // 実際に使用するモデルID (カスタムか標準か)
   const actualModelId = showCustomModelInput ? customModelId : selectedModelId;
@@ -75,11 +76,16 @@ const App: React.FC = () => {
   const [generatedItems, setGeneratedItems] = React.useState<Array<{
     id: string;
     html: string;
-    svg: string;
+    svg?: string;
+    css?: string;
+    fullContent?: string;
     width: number;
     height: number;
   }>>([]);
   const [lastInsertedNodeId, setLastInsertedNodeId] = React.useState<string | null>(null);
+  
+  // バッチ処理中に画像を蓄積する新しい状態変数を追加
+  const [batchImageAssets, setBatchImageAssets] = React.useState<Array<{id: string, name: string, data: string}>>([]);
   
   // 選択要素からサイズ情報を取得する関数
   const getSelectionSize = (selectionItems: SelectionInfo[]): { width: string, height: string } | null => {
@@ -229,10 +235,8 @@ const App: React.FC = () => {
       } else if (message.type === 'image-inserted') {
         if (message.success) {
           setProgress({ stage: '画像挿入完了', percentage: 100 });
-          setTimeout(() => setIsGeneratingImage(false), 1000);
         } else {
-          setImageGenerationError(`画像挿入エラー: ${message.error}`);
-          setIsGeneratingImage(false);
+          setError(`画像挿入エラー: ${message.error}`);
         }
       } else if (message.type === 'api-key-result') {
         // APIキーを受け取ったら状態を更新
@@ -371,21 +375,6 @@ const App: React.FC = () => {
     }
   };
 
-  // テンプレートタイプに基づいてベースプロンプトを生成する関数
-  const getBasePromptForTemplate = (type: TemplateType): string => {
-    switch (type) {
-      case 'webdesign':
-        return 'モダンでレスポンシブなウェブページを作成してください。';
-      case 'presentation':
-        return 'シンプルで見やすいプレゼンテーションスライドを作成してください。';
-      case 'diagram':
-        return '明確で分かりやすい図表を作成してください。';
-      case 'wireframe':
-        return '白黒のシンプルなワイヤーフレーム/構成ラフを作成してください。画像やアイコンが入る場所にはプレースホルダーを配置してください。';
-      default:
-        return '';
-    }
-  };
   
   // 幅の入力変更ハンドラー
   const handleWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -525,36 +514,92 @@ const App: React.FC = () => {
       );
       setHtmlResult(htmlContent);
       
-      setProgress({ stage: 'HTMLをSVGに変換中...', percentage: 60 });
-      
-      // 幅と高さの処理
-      const widthParam = generateWidth === 'auto' ? undefined : generateWidth;
-      const heightParam = generateHeight === 'auto' ? undefined : generateHeight;
-      
-      // HTMLをSVGに変換
-      const svgResult = await convertHtmlToSvg(
-        htmlContent, 
-        designTokens,
-        widthParam,
-        heightParam
-      );
-      setSvgResult(svgResult.svg);
-      setSvgSize({ width: svgResult.width, height: svgResult.height });
-      
-      setProgress({ stage: 'Figmaに挿入中...', percentage: 80 });
-      
-      // Figmaに挿入リクエスト（SVGとサイズ情報も一緒に送信）
-      parent.postMessage(
-        { 
-          pluginMessage: { 
-            type: 'insert-svg', 
-            svg: svgResult.svg,
-            width: svgResult.width,
-            height: svgResult.height
-          } 
-        },
-        '*'
-      );
+      // この部分を条件分岐で変更
+      if (templateType === 'coding' && directCodeOutput) {
+        // コーディングモード + 直接出力の場合
+        setProgress({ stage: 'HTML/CSSを処理中...', percentage: 60 });
+        
+        // プレフィックス設定
+        const codeOptions: CodeGenerationOptions = {
+          addPrefix: addCodePrefix,
+          prefix: codePrefix,
+          useBEM: useBEMNotation,
+          mergeCss: mergeCssInBatch
+        };
+        
+        // HTML/CSSを処理
+        const { html, css } = processHtmlWithPrefixes(htmlContent, codeOptions);
+        
+        let processedHtml = html;
+        let imageAssets: Array<{id: string, name: string, data: string}> = [];
+        
+        // 画像アセットの抽出が必要な場合
+        if (includeImages && currentSelection.length > 0) {
+          setProgress({ stage: '画像アセットを処理中...', percentage: 70 });
+          
+          try {
+            console.log(`Extracting images for single generation...`);
+            // 選択要素から画像をエクスポート
+            const imageAssets = await extractImagesFromSelection(currentSelection);
+            
+            console.log(`Extracted ${imageAssets.length} images`);
+            
+            // HTMLのimg要素のsrc属性を更新
+            if (imageAssets.length > 0) {
+              processedHtml = updateHtmlWithImagePaths(html, imageAssets, false);
+            } else {
+              console.warn('No images found in selection');
+            }
+          } catch (imgError) {
+            console.error('Image processing error:', imgError);
+            // エラーがあっても処理は続行
+          }
+        }
+        
+        // 生成結果を保存
+        const files = [
+          { name: 'index.html', content: processedHtml },
+          { name: 'style.css', content: css }
+        ];
+        
+        // ダウンロード処理（画像を含める）
+        await createAndDownloadZip(files, 'generated-code', imageAssets);
+        
+        setProgress({ stage: 'コード生成完了', percentage: 100 });
+        setTimeout(() => setIsLoading(false), 1000);
+      } else {
+        // 通常のSVG出力処理（既存コード）
+        setProgress({ stage: 'HTMLをSVGに変換中...', percentage: 60 });
+        
+        // 幅と高さの処理
+        const widthParam = generateWidth === 'auto' ? undefined : generateWidth;
+        const heightParam = generateHeight === 'auto' ? undefined : generateHeight;
+        
+        // HTMLをSVGに変換
+        const svgResult = await convertHtmlToSvg(
+          htmlContent, 
+          designTokens,
+          widthParam,
+          heightParam
+        );
+        setSvgResult(svgResult.svg);
+        setSvgSize({ width: svgResult.width, height: svgResult.height });
+        
+        setProgress({ stage: 'Figmaに挿入中...', percentage: 80 });
+        
+        // Figmaに挿入リクエスト（SVGとサイズ情報も一緒に送信）
+        parent.postMessage(
+          { 
+            pluginMessage: { 
+              type: 'insert-svg', 
+              svg: svgResult.svg,
+              width: svgResult.width,
+              height: svgResult.height
+            } 
+          },
+          '*'
+        );
+      }
     } catch (err) {
       setError(`エラー: ${err instanceof Error ? err.message : String(err)}`);
       setIsLoading(false);
@@ -596,11 +641,18 @@ const App: React.FC = () => {
         const title = promptItem?.title || `画面${index + 1}`;
         const safeTitle = title.replace(/[^\w\s]/gi, '_'); // ファイル名に使えない文字を置換
         
-        // SVGファイルを追加
-        zip.file(`${safeTitle}.svg`, item.svg);
-        
         // HTMLファイルを追加
         zip.file(`${safeTitle}.html`, item.html);
+
+        // SVGファイルがある場合は追加
+        if (item.svg) {
+          zip.file(`${safeTitle}.svg`, item.svg);
+        }
+        
+        // CSSファイルがある場合は追加
+        if (item.css) {
+          zip.file(`${safeTitle}.css`, item.css);
+        }
       });
       
       // ZIPを生成してダウンロード
@@ -646,6 +698,9 @@ const App: React.FC = () => {
     setCurrentBatchIndex(0);
     setIsBatchGenerating(true);
     
+    // 追加: 画像アセットをリセット
+    setBatchImageAssets([]);
+    
     // 最初のプロンプトの生成は自動的に開始される（useEffect内）
   };
   
@@ -667,6 +722,15 @@ const App: React.FC = () => {
     }
     
     try {
+      // バッチ処理のデバッグログ追加
+      console.group(`Batch generation - Item ${currentBatchIndex + 1}/${promptItems.length}`);
+      console.log('Processing prompt:', currentItem.title);
+      console.log('Selection info count:', selection.length);
+      console.log('Template type:', templateType);
+      console.log('Direct code output:', directCodeOutput);
+      console.log('Merge CSS in batch:', mergeCssInBatch);
+      console.log('Include images:', includeImages);
+      
       // プログレス表示を更新
       setProgress({ 
         stage: `${currentItem.title || `プロンプト ${currentBatchIndex + 1}`} を処理中... (${currentBatchIndex + 1}/${promptItems.length})`, 
@@ -676,44 +740,88 @@ const App: React.FC = () => {
       // コーディングモードの場合、詳細な選択情報を改めて取得
       let currentSelection = selection;
       if (templateType === 'coding') {
-        // 詳細選択情報を取得するためのメッセージを送信
-        parent.postMessage(
-          { 
-            pluginMessage: { 
-              type: 'get-selection-with-template-type',
-              templateType: 'coding'
-            } 
-          },
-          '*'
-        );
-        
-        // 選択情報を受け取るための処理
-        const selectionPromise = new Promise<SelectionInfo[]>((resolve) => {
-          const messageHandler = (event: MessageEvent) => {
-            const message = event.data.pluginMessage;
-            if (message && message.type === 'selection-with-template-type-result') {
+        // プロンプト項目に選択レイヤーIDが指定されている場合
+        if (currentItem.selectedLayerId) {
+          // レイヤー固有の選択情報を取得するためのメッセージを送信
+          parent.postMessage(
+            { 
+              pluginMessage: { 
+                type: 'get-layer-selection-info',
+                layerId: currentItem.selectedLayerId,
+                includeChildren,
+                includeImages
+              } 
+            },
+            '*'
+          );
+          
+          // レイヤー情報を受け取るための処理
+          const layerInfoPromise = new Promise<SelectionInfo[]>((resolve) => {
+            const messageHandler = (event: MessageEvent) => {
+              const message = event.data.pluginMessage;
+              if (message && message.type === 'layer-selection-info-result' && 
+                  message.layerId === currentItem.selectedLayerId) {
+                window.removeEventListener('message', messageHandler);
+                resolve(message.selectionInfo);
+              }
+            };
+            
+            window.addEventListener('message', messageHandler);
+            
+            // タイムアウト処理（5秒後にデフォルト値で解決）
+            setTimeout(() => {
               window.removeEventListener('message', messageHandler);
-              resolve(message.selection);
-            }
-          };
+              resolve(selection); // タイムアウトした場合は現在の選択情報を使用
+            }, 5000);
+          });
           
-          window.addEventListener('message', messageHandler);
+          // レイヤー情報を待機
+          const layerSelectionInfo = await layerInfoPromise;
+          if (layerSelectionInfo && layerSelectionInfo.length > 0) {
+            currentSelection = layerSelectionInfo;
+            console.log(`プロンプト "${currentItem.title}" 用のレイヤー情報を取得:`, currentSelection);
+          }
+        } else {
+          // 詳細選択情報を取得するためのメッセージを送信
+          parent.postMessage(
+            { 
+              pluginMessage: { 
+                type: 'get-selection-with-template-type',
+                templateType: 'coding'
+              } 
+            },
+            '*'
+          );
           
-          // タイムアウト処理（5秒後にデフォルト値で解決）
-          setTimeout(() => {
-            window.removeEventListener('message', messageHandler);
-            resolve(selection); // タイムアウトした場合は現在の選択情報を使用
-          }, 5000);
-        });
-        
-        // 選択情報を待機
-        currentSelection = await selectionPromise;
-        console.log('コーディングモード（バッチ）で詳細な選択情報を取得:', currentSelection);
+          // 選択情報を受け取るための処理
+          const selectionPromise = new Promise<SelectionInfo[]>((resolve) => {
+            const messageHandler = (event: MessageEvent) => {
+              const message = event.data.pluginMessage;
+              if (message && message.type === 'selection-with-template-type-result') {
+                window.removeEventListener('message', messageHandler);
+                resolve(message.selection);
+              }
+            };
+            
+            window.addEventListener('message', messageHandler);
+            
+            // タイムアウト処理（5秒後にデフォルト値で解決）
+            setTimeout(() => {
+              window.removeEventListener('message', messageHandler);
+              resolve(selection); // タイムアウトした場合は現在の選択情報を使用
+            }, 5000);
+          });
+          
+          // 選択情報を待機
+          currentSelection = await selectionPromise;
+          console.log('コーディングモード（バッチ）で詳細な選択情報を取得:', currentSelection);
+        }
       }
       
       // 過去に生成したアイテムを参照するためのコンテキスト情報を構築
       let contextInfo = '';
       if (generatedItems.length > 0) {
+        // 画面情報の概要
         contextInfo = `
         これまでに生成した画面情報:
         ${generatedItems.map((item, idx) => {
@@ -721,7 +829,30 @@ const App: React.FC = () => {
           return `画面${idx + 1}: ${prompt?.title || 'タイトルなし'} - ${prompt?.content || '詳細なし'}`;
         }).join('\n')}
         
+        // 以前生成したHTML/CSSコードのサンプル（クラス命名の参考用）
+        ${generatedItems.slice(0, 2).map((item, idx) => {
+          const prompt = promptItems.find(p => p.id === item.id);
+          return `
+          === ${prompt?.title || `画面${idx + 1}`}のHTMLサンプル ===
+          \`\`\`html
+          ${item.html ? item.html.substring(0, 1500) + (item.html.length > 1500 ? '...(省略)' : '') : '(HTMLなし)'}
+          \`\`\`
+          
+          === ${prompt?.title || `画面${idx + 1}`}のCSSサンプル ===
+          \`\`\`css
+          ${item.css ? item.css.substring(0, 1500) + (item.css.length > 1500 ? '...(省略)' : '') : '(CSSなし)'}
+          \`\`\`
+          `;
+        }).join('\n')}
+        
         上記の画面と一貫性のあるデザインで、以下の画面を作成してください。
+        
+        コンポーネント命名規則についての重要な指示:
+        1. 同じ機能・役割を持つコンポーネントには、必ず同じクラス名を使用してください（例: ヘッダー、フッター、ナビゲーションなど）
+        2. 異なる機能・役割のコンポーネントには、異なるクラス名を使用してください
+        3. 以前のコードで使用されたクラス命名パターンを継続してください
+        4. クラス名は命名規則の一貫性を保ち、同じプレフィックスやサフィックスのパターンを維持してください
+        5. 特に共通要素（ボタン、フォーム要素、カード、セクションなど）の命名は統一してください
         `;
       }
       
@@ -740,58 +871,205 @@ const App: React.FC = () => {
         templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );
       
-      // 幅と高さの処理
-      const widthParam = generateWidth === 'auto' ? undefined : generateWidth;
-      const heightParam = generateHeight === 'auto' ? undefined : generateHeight;
-      
-      // HTMLをSVGに変換
-      const svgResult = await convertHtmlToSvg(
-        htmlContent, 
-        designTokens,
-        widthParam,
-        heightParam
-      );
-      
-      // 生成結果を保存
-      setGeneratedItems(prev => [
-        ...prev, 
-        {
-          id: currentItem.id,
-          html: htmlContent,
-          svg: svgResult.svg,
-          width: svgResult.width,
-          height: svgResult.height
+      // コーディングモード + 直接出力の場合の処理
+      if (templateType === 'coding' && directCodeOutput) {
+        setProgress({ 
+          stage: `HTML/CSSを処理中... (${currentBatchIndex + 1}/${promptItems.length})`, 
+          percentage: 60 
+        });
+        
+        // プレフィックス設定
+        const componentName = currentItem.title.toLowerCase().replace(/\s+/g, '-') || `screen-${currentBatchIndex + 1}`;
+        const codeOptions: CodeGenerationOptions = {
+          addPrefix: addCodePrefix,
+          prefix: codePrefix,
+          useBEM: useBEMNotation,
+          mergeCss: mergeCssInBatch
+        };
+        
+        // HTML/CSSを処理 - バッチアイテムであることを示すフラグを追加
+        const { html, css } = processHtmlWithPrefixes(
+          htmlContent, 
+          codeOptions,
+          true,  // バッチアイテムであることを示す
+          mergeCssInBatch  // 共通CSSを使用するかどうか
+        );
+        
+        let processedHtml = html;
+        let imageAssets: Array<{id: string, name: string, data: string}> = [];
+        
+        // 画像アセットの抽出が必要な場合（バッチ処理用）
+        if (includeImages && currentSelection.length > 0) {
+          try {
+            console.log(`Extracting images for prompt "${currentItem.title}"...`);
+            // 選択要素から画像をエクスポート
+            const currentImageAssets = await extractImagesFromSelection(currentSelection);
+            
+            console.log(`Extracted ${currentImageAssets.length} images for prompt "${currentItem.title}"`);
+            
+            // 画像アセットを変数に保存
+            imageAssets = currentImageAssets;
+            
+            // HTMLのimg要素のsrc属性を更新 - 共通フォルダフラグを追加
+            if (currentImageAssets.length > 0) {
+              processedHtml = updateHtmlWithImagePaths(html, currentImageAssets, mergeCssInBatch);
+              
+              // 画像アセットを累積
+              setBatchImageAssets(prev => {
+                // 重複を避けるため、既に同じIDの画像がある場合は置き換える
+                const newAssets = [...prev];
+                currentImageAssets.forEach(asset => {
+                  const existingIndex = newAssets.findIndex(a => a.id === asset.id);
+                  if (existingIndex >= 0) {
+                    newAssets[existingIndex] = asset;
+                  } else {
+                    newAssets.push(asset);
+                  }
+                });
+                console.log(`Updated batch image assets, now have ${newAssets.length} images in total`);
+                return newAssets;
+              });
+            } else {
+              console.warn(`No images found in selection for prompt "${currentItem.title}"`);
+            }
+          } catch (imgError) {
+            console.error(`Image processing error for prompt "${currentItem.title}":`, imgError);
+            // エラーがあっても処理は続行
+          }
         }
-      ]);
-      
-      // 最新の生成結果を表示用に設定
-      setHtmlResult(htmlContent);
-      setSvgResult(svgResult.svg);
-      setSvgSize({ width: svgResult.width, height: svgResult.height });
-      
-      // Figmaに挿入リクエスト（SVGとサイズ情報、一括生成フラグも一緒に送信）
-      parent.postMessage(
-        { 
-          pluginMessage: { 
-            type: 'insert-svg', 
+        
+        // 生成結果を追加
+        setGeneratedItems(prev => [
+          ...prev, 
+          {
+            id: currentItem.id,
+            html: processedHtml,
+            css,
+            fullContent: htmlContent,
+            width: 0,
+            height: 0
+          }
+        ]);
+        
+        // 最後のアイテムの場合はZIPをダウンロード
+        if (currentBatchIndex === promptItems.length - 1) {
+          // 最後のアイテム処理前のログ
+          console.log('Processing final item, preparing ZIP');
+          
+          // CSSマージオプションに応じて処理
+          const batchFiles: Array<{ name: string, content: string }> = [];
+          const currentGeneratedItems = [...generatedItems, {
+            id: currentItem.id,
+            html: processedHtml,
+            css,
+            fullContent: htmlContent,
+            width: 0,
+            height: 0
+          }];
+          
+          if (mergeCssInBatch) {
+            // HTMLファイルの準備
+            currentGeneratedItems.forEach((item, idx) => {
+              const promptItem = promptItems.find(p => p.id === item.id);
+              const title = promptItem?.title || `screen-${idx + 1}`;
+              batchFiles.push({ name: `${title}/index.html`, content: item.html });
+            });
+            
+            // すべてのCSSを統合
+            const allCss = currentGeneratedItems.map(item => item.css || '');
+            batchFiles.push({ name: 'common/style.css', content: mergeCssFiles(allCss) });
+            
+            console.log('Created common CSS file for all HTML files');
+          } else {
+            // 個別CSSとして保存
+            currentGeneratedItems.forEach((item, idx) => {
+              const promptItem = promptItems.find(p => p.id === item.id);
+              const title = promptItem?.title || `screen-${idx + 1}`;
+              batchFiles.push(
+                { name: `${title}/index.html`, content: item.html },
+                { name: `${title}/style.css`, content: item.css || '' }
+              );
+            });
+            
+            console.log('Created individual CSS files for each HTML file');
+          }
+          
+          console.log(`Total files to be added: ${batchFiles.length}`);
+          console.log(`Total batch images to be added: ${batchImageAssets.length}`);
+          
+          // 蓄積した画像アセットを使用してZIPを作成
+          await createAndDownloadZip(batchFiles, 'generated-code-batch', batchImageAssets);
+          
+          setProgress({ stage: '一括生成完了', percentage: 100 });
+          setTimeout(() => {
+            setIsLoading(false);
+            setIsBatchGenerating(false);
+            setCurrentBatchIndex(0);
+          }, 1000);
+        } else {
+          // 次のプロンプトへ
+          setCurrentBatchIndex(prevIndex => prevIndex + 1);
+        }
+      } else {
+        // 通常のSVG出力処理（既存コード）
+        // 幅と高さの処理
+        const widthParam = generateWidth === 'auto' ? undefined : generateWidth;
+        const heightParam = generateHeight === 'auto' ? undefined : generateHeight;
+        
+        // HTMLをSVGに変換
+        const svgResult = await convertHtmlToSvg(
+          htmlContent, 
+          designTokens,
+          widthParam,
+          heightParam
+        );
+        
+        // 生成結果を保存
+        setGeneratedItems(prev => [
+          ...prev, 
+          {
+            id: currentItem.id,
+            html: htmlContent,
             svg: svgResult.svg,
             width: svgResult.width,
-            height: svgResult.height,
-            isBatchGeneration: true,
-            batchItemTitle: currentItem.title,
-            batchIndex: currentBatchIndex,
-            batchTotal: promptItems.length
-          } 
-        },
-        '*'
-      );
+            height: svgResult.height
+          }
+        ]);
+        
+        // 最新の生成結果を表示用に設定
+        setHtmlResult(htmlContent);
+        setSvgResult(svgResult.svg);
+        setSvgSize({ width: svgResult.width, height: svgResult.height });
+        
+        // Figmaに挿入リクエスト（SVGとサイズ情報、一括生成フラグも一緒に送信）
+        parent.postMessage(
+          { 
+            pluginMessage: { 
+              type: 'insert-svg', 
+              svg: svgResult.svg,
+              width: svgResult.width,
+              height: svgResult.height,
+              isBatchGeneration: true,
+              batchItemTitle: currentItem.title,
+              batchIndex: currentBatchIndex,
+              batchTotal: promptItems.length
+            } 
+          },
+          '*'
+        );
+        
+        // 注: 次のプロンプトへの移行はFigmaからの挿入完了メッセージ受信時に行う
+        
+      }
       
-      // 注: 次のプロンプトへの移行はFigmaからの挿入完了メッセージ受信時に行う
-      
+      // ロギンググループを終了
+      console.groupEnd();
     } catch (err) {
+      console.error(`Error processing prompt "${currentItem.title}":`, err);
       setError(`エラー (${currentItem.title}): ${err instanceof Error ? err.message : String(err)}`);
       setIsBatchGenerating(false);
       setIsLoading(false);
+      console.groupEnd();
     }
   };
 
@@ -968,18 +1246,28 @@ const App: React.FC = () => {
                   <li key={item.id} className="flex justify-between">
                     <span>{promptItem?.title || `画面${index + 1}`}</span>
                     <div className="flex space-x-2">
-                      <button
-                        onClick={() => downloadFile(item.svg, `${promptItem?.title || `screen-${index + 1}`}.svg`, 'image/svg+xml')}
-                        className="text-blue-500 hover:text-blue-700"
-                      >
-                        SVG
-                      </button>
+                      {item.svg && (
+                        <button
+                          onClick={() => downloadFile(item.svg, `${promptItem?.title || `screen-${index + 1}`}.svg`, 'image/svg+xml')}
+                          className="text-blue-500 hover:text-blue-700"
+                        >
+                          SVG
+                        </button>
+                      )}
                       <button
                         onClick={() => downloadFile(item.html, `${promptItem?.title || `screen-${index + 1}`}.html`, 'text/html')}
                         className="text-green-500 hover:text-green-700"
                       >
                         HTML
                       </button>
+                      {item.css && (
+                        <button
+                          onClick={() => downloadFile(item.css, `${promptItem?.title || `screen-${index + 1}`}.css`, 'text/css')}
+                          className="text-purple-500 hover:text-purple-700"
+                        >
+                          CSS
+                        </button>
+                      )}
                     </div>
                   </li>
                 );
@@ -1029,482 +1317,101 @@ const App: React.FC = () => {
   // 設定タブのコンテンツをレンダリングする関数
   const renderSettingsTab = () => {
     return (
-      <div className="space-y-6">
-        {/* タブヘッダー */}
-        <div className="flex border-b border-gray-200 mb-4">
-          <button 
-            className={`px-3 py-2 text-sm font-medium transition-colors ${activeSettingsTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
-            onClick={() => setActiveSettingsTab('general')}
-          >
-            一般設定
-          </button>
-          <button 
-            className={`px-3 py-2 text-sm font-medium transition-colors ${activeSettingsTab === 'model' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
-            onClick={() => setActiveSettingsTab('model')}
-          >
-            モデル設定
-          </button>
-          <button 
-            className={`px-3 py-2 text-sm font-medium transition-colors ${activeSettingsTab === 'prompt' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
-            onClick={() => setActiveSettingsTab('prompt')}
-          >
-            プロンプト設定
-          </button>
-        </div>
-        
-        {/* タブコンテンツ */}
-        {/* 一般設定 */}
-        {activeSettingsTab === 'general' && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <div className="flex flex-col md:flex-row md:items-center gap-2">
-              <label htmlFor="api-key" className="text-sm font-medium text-gray-700 min-w-24">API Key:</label>
-              <input
-                id="api-key"
-                type="password"
-                value={apiKey}
-                onChange={handleApiKeyChange}
-                placeholder="sk-... / API Key"
-                className="flex-1 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-          </div>
-        )}
-        
-        {/* モデル設定 */}
-        {activeSettingsTab === 'model' && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <div className="flex flex-col gap-3">
-              <label htmlFor="model-select" className="text-sm font-medium text-gray-700">AIモデル:</label>
-              <div className="flex flex-col md:flex-row gap-3">
-                <select
-                  id="model-select"
-                  value={showCustomModelInput ? "custom" : selectedModelId}
-                  onChange={(e) => {
-                    const newValue = e.target.value;
-                    if (newValue === "custom") {
-                      setShowCustomModelInput(true);
-                    } else {
-                      setShowCustomModelInput(false);
-                      setSelectedModelId(newValue);
-                    }
-                  }}
-                  disabled={isLoading}
-                  className="p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                >
-                  {DEFAULT_MODELS.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.name}
-                    </option>
-                  ))}
-                  <option value="custom">カスタムモデル...</option>
-                </select>
-                
-                {showCustomModelInput && (
-                  <input
-                    type="text"
-                    placeholder="例: openai/gpt-4o-turbo"
-                    value={customModelId}
-                    onChange={(e) => setCustomModelId(e.target.value)}
-                    disabled={isLoading}
-                    className="p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                )}
-              </div>
-              
-              <p className="text-xs text-gray-500">
-                プロバイダー: {getCurrentProviderName()}
-                {showCustomModelInput && ' (カスタムモデルではOpenRouter APIを使用します)'}
-              </p>
-            </div>
-          </div>
-        )}
-        
-        {/* プロンプト設定 */}
-        {activeSettingsTab === 'prompt' && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label htmlFor="base-prompt" className="text-sm font-medium text-gray-700">ベースプロンプト:</label>
-                <button
-                  type="button"
-                  onClick={handleAutoGenerateBasePrompt}
-                  disabled={isLoading || isGeneratingBasePrompt}
-                  className="px-2 py-1 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                >
-                  {isGeneratingBasePrompt ? (
-                    <>
-                      <span className="animate-spin h-3 w-3 border-t-2 border-blue-500 border-r-2 border-blue-500 rounded-full"></span>
-                      <span>生成中...</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M11 3a1 1 0 10-2 0v1H8a1 1 0 100 2h1v1a1 1 0 102 0V6h1a1 1 0 100-2h-1V3z"></path>
-                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm0-2a6 6 0 100-12 6 6 0 000 12z" clipRule="evenodd"></path>
-                      </svg>
-                      <span>AIで自動生成</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <textarea
-                id="base-prompt"
-                value={basePrompt}
-                onChange={handleBasePromptChange}
-                placeholder="すべてのプロンプトの先頭に追加される基本指示を入力..."
-                rows={4}
-                className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                ※ ここに入力した内容はすべてのプロンプトの先頭に自動的に追加されます
-              </p>
-            </div>
-            
-            {/* HTMLコーディング用プロンプト設定 */}
-            <div className="mt-6">
-              <div className="flex justify-between items-center mb-1">
-                <label htmlFor="coding-prompt" className="text-sm font-medium text-gray-700">HTMLコーディング用プロンプト:</label>
-              </div>
-              <textarea
-                id="coding-prompt"
-                value={codingPrompt}
-                onChange={handleCodingPromptChange}
-                placeholder="FLOCSSをベースにしたHTMLコーディングの指示を入力..."
-                rows={4}
-                className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                ※ ここに入力した内容は「コーディング」モード選択時に適用されます（デフォルト: FLOCSS）
-              </p>
-              <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
-                <h4 className="text-xs font-medium text-gray-700 mb-2">コーディングフレームワーク例:</h4>
-                <ul className="space-y-1 pl-4 list-disc text-xs text-gray-600">
-                  <li>FLOCSS（Foundation, Layout, Object）</li>
-                  <li>SMACSS（Scalable and Modular Architecture for CSS）</li>
-                  <li>BEM（Block, Element, Modifier）</li>
-                  <li>OOCSS（Object Oriented CSS）</li>
-                  <li>Atomic Design</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <SettingsTab
+        activeSettingsTab={activeSettingsTab}
+        setActiveSettingsTab={setActiveSettingsTab}
+        apiKey={apiKey}
+        handleApiKeyChange={handleApiKeyChange}
+        directCodeOutput={directCodeOutput}
+        setDirectCodeOutput={setDirectCodeOutput}
+        addCodePrefix={addCodePrefix}
+        setAddCodePrefix={setAddCodePrefix}
+        codePrefix={codePrefix}
+        setCodePrefix={setCodePrefix}
+        useBEMNotation={useBEMNotation}
+        setUseBEMNotation={setUseBEMNotation}
+        mergeCssInBatch={mergeCssInBatch}
+        setMergeCssInBatch={setMergeCssInBatch}
+        showCustomModelInput={showCustomModelInput}
+        setShowCustomModelInput={setShowCustomModelInput}
+        selectedModelId={selectedModelId}
+        setSelectedModelId={setSelectedModelId}
+        customModelId={customModelId}
+        setCustomModelId={setCustomModelId}
+        basePrompt={basePrompt}
+        handleBasePromptChange={handleBasePromptChange}
+        isGeneratingBasePrompt={isGeneratingBasePrompt}
+        handleAutoGenerateBasePrompt={handleAutoGenerateBasePrompt}
+        codingPrompt={codingPrompt}
+        handleCodingPromptChange={handleCodingPromptChange}
+        isLoading={isLoading}
+        getCurrentProviderName={getCurrentProviderName}
+        DEFAULT_MODELS={DEFAULT_MODELS}
+      />
     );
   };
 
-  // 画像生成タブのコンテンツをレンダリングする関数
-  const renderImageGenerationTab = () => {
-    // 画像をアスペクト比に基づいてサイズ調整
-    const getAspectRatioSize = () => {
-      // 基本サイズ（選択要素またはデフォルト）
-      let baseWidth = 500;
-      let baseHeight = 500;
-      
-      // 選択要素のサイズを取得（あれば）
-      if (selection && selection.length > 0) {
-        const size = getSelectionSize(selection);
-        if (size) {
-          baseWidth = parseInt(size.width, 10) || 500;
-          baseHeight = parseInt(size.height, 10) || 500;
-        }
-      }
-      
-      // アスペクト比に基づいて調整（長辺を基準に短辺を計算）
-      switch (imageAspectRatio) {
-        case '1:1':
-          // 正方形 - 幅と高さの大きい方を基準
-          const squareSize = Math.max(baseWidth, baseHeight);
-          return { width: squareSize.toString(), height: squareSize.toString() };
-        case '4:3':
-          if (baseWidth >= baseHeight) {
-            // 幅を基準
-            return { width: baseWidth.toString(), height: Math.round(baseWidth * 0.75).toString() };
-          } else {
-            // 高さを基準
-            return { width: Math.round(baseHeight * 4/3).toString(), height: baseHeight.toString() };
-          }
-        case '3:4':
-          if (baseWidth >= baseHeight) {
-            // 幅を基準
-            return { width: baseWidth.toString(), height: Math.round(baseWidth * 4/3).toString() };
-          } else {
-            // 高さを基準
-            return { width: Math.round(baseHeight * 0.75).toString(), height: baseHeight.toString() };
-          }
-        case '16:9':
-          if (baseWidth >= baseHeight) {
-            // 幅を基準
-            return { width: baseWidth.toString(), height: Math.round(baseWidth * 9/16).toString() };
-          } else {
-            // 高さを基準
-            return { width: Math.round(baseHeight * 16/9).toString(), height: baseHeight.toString() };
-          }
-        case '9:16':
-          if (baseWidth >= baseHeight) {
-            // 幅を基準
-            return { width: baseWidth.toString(), height: Math.round(baseWidth * 16/9).toString() };
-          } else {
-            // 高さを基準
-            return { width: Math.round(baseHeight * 9/16).toString(), height: baseHeight.toString() };
-          }
-        default:
-          return { width: baseWidth.toString(), height: baseHeight.toString() };
-      }
-    };
-    
-    // 画像生成ハンドラー
-    const handleGenerateImage = async () => {
-      if (!apiKey) {
-        setImageGenerationError('APIキーが設定されていません');
-        return;
-      }
-      
-      if (!imagePrompt) {
-        setImageGenerationError('プロンプトを入力してください');
-        return;
-      }
-      
-      setIsGeneratingImage(true);
-      setImageGenerationError('');
-      setGeneratedImage(null);
-      
-      try {
-        // プログレス更新
-        setProgress({ stage: 'AIによる画像生成中...', percentage: 30 });
-        
-        // 選択要素から画像データを取得
-        const imageData = selection.length > 0 && includeImages ? selection[0].imageData : undefined;
-        
-        // 画像サイズの取得
-        const { width, height } = getAspectRatioSize();
-        
-        console.log(`生成リクエスト: アスペクト比=${imageAspectRatio}, サイズ=${width}x${height}`);
-        
-        // 新しいユーザーメッセージをチャット履歴に追加
-        const newUserMessage = { role: 'user' as const, content: imagePrompt };
-        const updatedChatMessages = [...chatMessages, newUserMessage];
-        setChatMessages(updatedChatMessages);
-        
-        // Gemini APIで画像生成
-        const response = await generateImageWithGemini(
-          apiKey,
-          imagePrompt,
-          imageData,
-          imageAspectRatio,
-          chatMessages
-        );
-        
-        if (response.image) {
-          // 画像レスポンスがある場合
-          setGeneratedImage(response.image);
-          setProgress({ stage: 'Figmaに挿入中...', percentage: 80 });
-          
-          // Figmaに挿入リクエスト
-          parent.postMessage(
-            { 
-              pluginMessage: { 
-                type: 'insert-image', 
-                imageData: response.image,
-                width,
-                height,
-                aspectRatio: imageAspectRatio // アスペクト比情報も明示的に送信
-              } 
-            },
-            '*'
-          );
-          
-          // チャットインターフェースをリセット
-          setShowChatInterface(false);
-          setChatMessages([]);
-        }
-        
-        if (response.text) {
-          // テキストレスポンスがある場合、チャットインターフェースを表示
-          const modelResponse = { role: 'model' as const, content: response.text };
-          setChatMessages([...updatedChatMessages, modelResponse]);
-          setShowChatInterface(true);
-          setIsGeneratingImage(false);
-        }
-      } catch (err) {
-        setImageGenerationError(`エラー: ${err instanceof Error ? err.message : String(err)}`);
-        setIsGeneratingImage(false);
-      }
-    };
-    
-    // 継続的な会話用の送信ハンドラー
-    const handleContinueChat = () => {
-      if (!imagePrompt || isGeneratingImage) return;
-      handleGenerateImage();
-      setImagePrompt(''); // 入力欄をクリア
-    };
-    
-    // チャットメッセージの表示コンポーネント
-    const ChatMessage = ({ message }: { message: { role: 'user' | 'model', content: string } }) => {
-      return (
-        <div className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} mb-3`}>
-          <div className={`px-4 py-3 rounded-lg max-w-3/4 ${
-            message.role === 'user' 
-              ? 'bg-blue-100 text-blue-800' 
-              : 'bg-gray-100 text-gray-800'
-          }`}>
-            <p className="whitespace-pre-wrap text-sm">{message.content}</p>
-          </div>
-        </div>
-      );
-    };
-    
+  // リサーチタブのコンテンツをレンダリングする関数
+  const renderResearchTab = () => {
     return (
-      <div className="space-y-6">
-        {/* プロンプト入力 */}
-        <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-          <h3 className="text-base font-medium text-gray-800 mb-3">
-            {showChatInterface ? '会話を続ける' : '画像生成プロンプト'}
-          </h3>
-          <textarea
-            value={imagePrompt}
-            onChange={(e) => setImagePrompt(e.target.value)}
-            placeholder={showChatInterface 
-              ? "AIからの質問に答えるか、さらに詳細を入力してください..." 
-              : "AIに生成してほしい画像を詳しく説明してください..."}
-            rows={4}
-            disabled={isGeneratingImage}
-            className="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60 disabled:bg-gray-100"
-          />
-          
-          {/* 会話履歴が表示されている場合のリセットボタン */}
-          {showChatInterface && (
-            <div className="flex justify-end mt-2">
-              <button
-                onClick={() => {
-                  setShowChatInterface(false);
-                  setChatMessages([]);
-                }}
-                className="px-3 py-1 text-xs bg-gray-100 text-gray-600 border border-gray-300 rounded-md hover:bg-gray-200 transition-colors"
-              >
-                会話をリセット
-              </button>
-            </div>
-          )}
-        </div>
-        
-        {/* チャット会話履歴 */}
-        {showChatInterface && chatMessages.length > 0 && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <h3 className="text-base font-medium text-gray-800 mb-3">会話</h3>
-            <div className="space-y-2 max-h-80 overflow-y-auto">
-              {chatMessages.map((msg, index) => (
-                <ChatMessage key={index} message={msg} />
-              ))}
-            </div>
-          </div>
-        )}
-        
-        {/* アスペクト比選択 */}
-        {!showChatInterface && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <h3 className="text-base font-medium text-gray-800 mb-3">画像アスペクト比</h3>
-            <div className="flex flex-wrap gap-2">
-              {['1:1', '4:3', '3:4', '16:9', '9:16'].map((ratio) => (
-                <button
-                  key={ratio}
-                  onClick={() => setImageAspectRatio(ratio)}
-                  disabled={isGeneratingImage}
-                  className={`px-3 py-1.5 border rounded-md transition-colors ${
-                    imageAspectRatio === ratio 
-                      ? 'bg-blue-100 border-blue-300 text-blue-700' 
-                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  {ratio}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        
-        {/* 選択要素プレビュー */}
-        {!showChatInterface && (
-          <div>
-            <SelectionPreview selection={selection} />
-          </div>
-        )}
-        
-        {/* 選択要素の詳細取得設定 */}
-        {!showChatInterface && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <h3 className="text-sm font-bold text-gray-800 mb-3">選択要素の詳細取得設定</h3>
-            <div className="flex gap-x-3">
-              <div className="flex justify-center items-center">
-                <input
-                  type="checkbox"
-                  checked={includeImages}
-                  onChange={(e) => handleSelectionSettingsChange('images', e.target.checked)}
-                  disabled={isGeneratingImage}
-                  id="include-images-img"
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-              </div>
-              <div className="text-right">
-                <label htmlFor="include-images-img" className="text-sm text-gray-700 cursor-pointer">
-                  選択要素を画像として取得・編集
-                </label>
-              </div>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              ※ 選択した要素を画像として取得し、その画像を元に生成します
-            </p>
-          </div>
-        )}
-        
-        {/* 生成ボタン */}
-        <div className="flex justify-end">
-          <button 
-            onClick={showChatInterface ? handleContinueChat : handleGenerateImage}
-            disabled={isGeneratingImage || !imagePrompt}
-            className="px-4 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:bg-blue-400 transition-colors"
-          >
-            {isGeneratingImage ? '生成中...' : showChatInterface ? '送信' : '画像生成'}
-          </button>
-        </div>
-        
-        {/* 進捗表示 */}
-        {isGeneratingImage && (
-          <div>
-            <ProgressIndicator stage={progress.stage} percentage={progress.percentage} />
-          </div>
-        )}
-        
-        {/* エラー表示 */}
-        {imageGenerationError && (
-          <div className="bg-red-50 text-red-700 p-3 rounded-md">
-            {imageGenerationError}
-          </div>
-        )}
-        
-        {/* 生成画像プレビュー */}
-        {generatedImage && (
-          <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <h3 className="text-base font-medium text-gray-800 mb-3">生成された画像</h3>
-            <div className="flex justify-center">
-              <img 
-                src={generatedImage} 
-                alt="Generated image" 
-                className="max-w-full h-auto max-h-80 object-contain rounded-md border border-gray-200" 
-              />
-            </div>
-          </div>
-        )}
-      </div>
+      <ResearchTab
+        apiKey={apiKey}
+        modelId={actualModelId}
+        designTokens={designTokens}
+        selection={selection}
+        includeChildren={includeChildren}
+        includeImages={includeImages}
+      />
     );
   };
+
+  // カスタムフックを使用
+  const imageGeneration = useImageGeneration({
+    apiKey,
+    selection,
+    includeImages,
+    getSelectionSize
+  });
+  
+  // 画像生成タブのコンテンツをレンダリングする関数
+  const renderImageGenerationTab = () => {
+      return (
+      <ImageGenerationTab
+        imagePrompt={imageGeneration.imagePrompt}
+        setImagePrompt={imageGeneration.setImagePrompt}
+        generatedImage={imageGeneration.generatedImage}
+        setGeneratedImage={imageGeneration.setGeneratedImage}
+        imageAspectRatio={imageGeneration.imageAspectRatio}
+        setImageAspectRatio={imageGeneration.setImageAspectRatio}
+        isGeneratingImage={imageGeneration.isGeneratingImage}
+        setIsGeneratingImage={imageGeneration.setIsGeneratingImage}
+        imageGenerationError={imageGeneration.imageGenerationError}
+        setImageGenerationError={imageGeneration.setImageGenerationError}
+        progress={imageGeneration.progress}
+        setProgress={imageGeneration.setProgress}
+        chatMessages={imageGeneration.chatMessages}
+        setChatMessages={imageGeneration.setChatMessages}
+        showChatInterface={imageGeneration.showChatInterface}
+        setShowChatInterface={imageGeneration.setShowChatInterface}
+        selection={selection}
+        includeImages={includeImages}
+        handleSelectionSettingsChange={handleSelectionSettingsChange}
+        apiKey={apiKey}
+        handleGenerateImage={imageGeneration.handleGenerateImage}
+        handleContinueChat={imageGeneration.handleContinueChat}
+        getSelectionSize={getSelectionSize}
+        getAspectRatioSize={imageGeneration.getAspectRatioSize}
+      />
+    );
+  };
+  
 
   return (
     <div className="mx-auto p-2 pt-0  max-w-4xl">
       <div className="flex justify-between items-center">
         <h1 className="text-xl font-bold mb-4 text-gray-800 flex gap-2 items-center">
           <span className="text-sm bg-slate-800 text-white rounded-sm flex items-center justify-center w-7 h-7 mr-0">GG</span>
-          AI Generator
+          AI
         </h1>
       {/* メインタブUI */}
         <div className="mb-2">
@@ -1520,6 +1427,12 @@ const App: React.FC = () => {
             onClick={() => setActiveMainTab('image-generation')}
           >
             画像生成
+          </button>
+          <button 
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'research' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+            onClick={() => setActiveMainTab('research')}
+          >
+            リサーチ
           </button>
           <button 
               className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'tokens' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
@@ -1543,6 +1456,7 @@ const App: React.FC = () => {
         {activeMainTab === 'image-generation' && renderImageGenerationTab()}
         {activeMainTab === 'tokens' && renderTokensTab()}
         {activeMainTab === 'settings' && renderSettingsTab()}
+        {activeMainTab === 'research' && renderResearchTab()}
       </div>
     </div>
   );

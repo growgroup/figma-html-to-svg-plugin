@@ -368,6 +368,9 @@ async function collectTextContentRecursively(node: SceneNode): Promise<any> {
 // getSelectionInfo関数を修正して、リサーチモード用にテキスト情報を収集する処理を追加
 async function getSelectionInfo(includeChildren: boolean = false, includeImages: boolean = false, templateType?: string) {
   try {
+    // 大きすぎる要素の閾値を設定
+    const MAX_DIMENSION_SIZE = 10000; // ピクセル単位の最大サイズ
+    
     // エラーが起きそうな要素があるかチェック
     const hasProblematicInstance = figma.currentPage.selection.some(node => {
       return node.type === 'INSTANCE' && 
@@ -378,8 +381,29 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
       console.log('シリアライズできないインスタンスを検出しました。安全モードで処理します。');
     }
     
-    // 通常の選択情報
-    const basicInfo = figma.currentPage.selection.map(node => {
+    // サイズが大きすぎる要素をフィルタリング
+    const filteredSelection = figma.currentPage.selection.filter(node => {
+      if ('width' in node && 'height' in node) {
+        const isTooLarge = node.width > MAX_DIMENSION_SIZE || node.height > MAX_DIMENSION_SIZE;
+        if (isTooLarge) {
+          console.log(`スキップ: 要素 "${node.name}" (${node.id}) は大きすぎます (${node.width}x${node.height}px)`);
+          return false;
+        }
+      }
+      return true;
+    });
+    
+    // スキップした要素がある場合は通知
+    if (filteredSelection.length < figma.currentPage.selection.length) {
+      const skippedCount = figma.currentPage.selection.length - filteredSelection.length;
+      console.log(`${skippedCount}個の大きすぎる要素をスキップしました`);
+      
+      // ユーザーに通知
+      figma.notify(`${skippedCount}個の大きすぎる要素（${MAX_DIMENSION_SIZE}px以上）をスキップしました`, { timeout: 3000 });
+    }
+    
+    // 通常の選択情報（フィルタリング済みの選択を使用）
+    const basicInfo = filteredSelection.map(node => {
       try {
         const base = {
           id: node.id,
@@ -452,7 +476,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
         console.log('リサーチモード: テキスト情報を収集します');
         
         // テキスト内容の収集
-        const textPromises = figma.currentPage.selection.map(node => 
+        const textPromises = filteredSelection.map(node => 
           collectTextContentRecursively(node)
         );
         const textContents = await Promise.all(textPromises);
@@ -466,7 +490,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
         // 階層情報を含める場合
         if (includeChildren) {
           try {
-            const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+            const hierarchyInfo = filteredSelection.map(node => getNodeInfoRecursive(node));
             
             // 基本情報と階層情報を結合
             const combinedInfo = extendedInfo.map((baseNode, index) => ({
@@ -477,7 +501,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
             // 画像も含める場合
             if (includeImages) {
               try {
-                const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+                const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
                 const images = await Promise.all(imagePromises);
                 
                 const result = combinedInfo.map((node, index) => ({
@@ -520,7 +544,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
         // 画像のみ含める場合
         if (includeImages) {
           try {
-            const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+            const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
             const images = await Promise.all(imagePromises);
             
             const result = extendedInfo.map((node, index) => ({
@@ -563,7 +587,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
     // コーディング用の詳細情報を取得
     if (templateType === 'coding') {
       // 安全に詳細情報を取得
-      const detailedInfo = figma.currentPage.selection.map(node => {
+      const detailedInfo = filteredSelection.map(node => {
         try {
           return getDetailedNodeInfo(node);
         } catch (error) {
@@ -587,7 +611,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
       if (includeChildren) {
         try {
           // 安全に階層情報を取得
-          const hierarchyInfo = figma.currentPage.selection.map(node => {
+          const hierarchyInfo = filteredSelection.map(node => {
             try {
               return getNodeInfoRecursiveWithStyles(node);
             } catch (error) {
@@ -609,7 +633,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
           // 画像も含める場合
           if (includeImages) {
             try {
-              const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+              const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
               const images = await Promise.all(imagePromises);
               
               const result = combinedInfo.map((node, index) => ({
@@ -655,7 +679,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
       // 画像のみ含める場合
       if (includeImages) {
         try {
-          const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+          const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
           const images = await Promise.all(imagePromises);
           
           const result = codingInfo.map((node, index) => ({
@@ -694,7 +718,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
     // 通常の階層情報処理（非コーディングモード）
     if (includeChildren) {
       try {
-        const hierarchyInfo = figma.currentPage.selection.map(node => getNodeInfoRecursive(node));
+        const hierarchyInfo = filteredSelection.map(node => getNodeInfoRecursive(node));
         
         // 基本情報と階層情報を結合
         const combinedInfo = basicInfo.map((baseNode, index) => ({
@@ -705,7 +729,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
         // 画像も含める場合
         if (includeImages) {
           try {
-            const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+            const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
             const images = await Promise.all(imagePromises);
             
             const result = combinedInfo.map((node, index) => ({
@@ -748,7 +772,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
     // 画像のみ含める場合
     if (includeImages) {
       try {
-        const imagePromises = figma.currentPage.selection.map(node => exportSelectionAsImage(node));
+        const imagePromises = filteredSelection.map(node => exportSelectionAsImage(node));
         const images = await Promise.all(imagePromises);
         
         const result = basicInfo.map((node, index) => ({
@@ -788,7 +812,9 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
     return figma.currentPage.selection.map(node => ({
       id: node.id,
       name: node.name,
-      type: node.type
+      type: node.type,
+      skipped: 'width' in node && 'height' in node ? 
+        (node.width > 10000 || node.height > 10000) : false
     }));
   }
 }

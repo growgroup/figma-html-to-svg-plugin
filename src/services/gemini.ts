@@ -16,6 +16,12 @@ export const DEFAULT_MODELS: AIModel[] = [
     apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent'
   },
   { 
+    id: 'gemini-2-0-flash', 
+    name: 'Google Gemini 2.0 Flash',
+    provider: 'gemini',
+    apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+  },
+  { 
     id: 'google/gemini-2.5-pro-exp-03-25:free', 
     name: 'Google Gemini 2.5 Pro (OpenRouter)',
     provider: 'openrouter',
@@ -571,7 +577,7 @@ export async function generateImageWithGemini(
     }
     
     // 新しいプロンプトを追加
-    const newMessageParts: any[] = [{ text: prompt }];
+    const newMessageParts: any[] = [{ text: prompt + " ※画像のみを生成するように心がけてください。" }];
     
     // 既存画像データがある場合は追加
     if (imageData) {
@@ -642,7 +648,7 @@ export async function generateImageWithGemini(
     
     // 画像もテキストもない場合はエラー
     if (!result.image && !result.text) {
-      throw new Error('APIレスポンスに画像もテキストも含まれていません');
+      throw new Error('APIレスポンスに画像もテキストも含まれていません' + JSON.stringify(data));
     }
     
     return result;
@@ -687,7 +693,7 @@ export async function processSingleElement(
   switch (researchType) {
     case 'coding':
       systemMessage = `
-      あなたはFigmaデザインからコーディング計画を作成する専門家です。提供されたデザイン要素の情報と画像を分析し、
+      あなたはFigmaデザインからHTMLコーディング計画を作成する専門家です。提供されたデザイン要素の情報と画像を分析し、
       HTMLとCSSで効率的に実装するための計画をマークダウン形式で作成してください。
       `;
       break;

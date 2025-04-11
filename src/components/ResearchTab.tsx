@@ -16,7 +16,9 @@ const RESEARCH_TEMPLATES = {
   
   1. コンポーネント分析:
      - 各画面に存在する主要コンポーネントの特定と命名
-     - コンポーネントの階層関係の整理
+     - 命名はFLOCSSを利用すること。
+        - 基本的には layout と component を利用する。projectは利用しない
+        - 状態は、 is-* を利用すること。例: is-sm、is-md
      - 再利用可能なコンポーネントの抽出
   
   2. コーディング指示:
@@ -528,6 +530,7 @@ const ResearchTab: React.FC<ResearchTabProps> = ({
       {/* プロンプト入力 */}
       <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
         <label htmlFor="research-prompt" className="block text-sm font-medium text-gray-700 mb-1">リサーチ指示:</label>
+        <p className="text-xs text-gray-500 mb-2">※ 複数のレイヤーを選択している場合は、レイヤーごとに分析します。</p>
         <textarea
           id="research-prompt"
           value={prompt}

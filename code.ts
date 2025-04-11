@@ -384,8 +384,9 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
     // サイズが大きすぎる要素をフィルタリング
     const filteredSelection = figma.currentPage.selection.filter(node => {
       if ('width' in node && 'height' in node) {
-        const isTooLarge = node.width > MAX_DIMENSION_SIZE || node.height > MAX_DIMENSION_SIZE;
+        const isTooLarge = node.width > MAX_DIMENSION_SIZE || node.height > MAX_DIMENSION_SIZE*4;
         if (isTooLarge) {
+          
           console.log(`スキップ: 要素 "${node.name}" (${node.id}) は大きすぎます (${node.width}x${node.height}px)`);
           return false;
         }
@@ -814,7 +815,7 @@ async function getSelectionInfo(includeChildren: boolean = false, includeImages:
       name: node.name,
       type: node.type,
       skipped: 'width' in node && 'height' in node ? 
-        (node.width > 10000 || node.height > 10000) : false
+        (node.width > 10000 || node.height > 40000) : false
     }));
   }
 }

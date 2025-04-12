@@ -26,6 +26,11 @@ interface PromptInputProps {
   onBatchGenerate: () => void;
   isBatchMode: boolean;
   onBatchModeChange: (isBatch: boolean) => void;
+  // 画像関連の設定
+  useAdvancedImageDetection?: boolean;
+  onAdvancedImageDetectionChange?: (value: boolean) => void;
+  includeImages?: boolean;
+  onIncludeImagesChange?: (value: boolean) => void;
 }
 
 const PromptInput: React.FC<PromptInputProps> = ({ 
@@ -39,7 +44,11 @@ const PromptInput: React.FC<PromptInputProps> = ({
   onPromptItemsChange,
   onBatchGenerate,
   isBatchMode,
-  onBatchModeChange
+  onBatchModeChange,
+  useAdvancedImageDetection,
+  onAdvancedImageDetectionChange,
+  includeImages,
+  onIncludeImagesChange
 }) => {
   const [showExamples, setShowExamples] = React.useState(false);
   
@@ -48,6 +57,10 @@ const PromptInput: React.FC<PromptInputProps> = ({
   const [currentEditingPromptId, setCurrentEditingPromptId] = React.useState<string | null>(null);
   const [availableLayers, setAvailableLayers] = React.useState<Array<{id: string, name: string, type: string}>>([]);
   const [isLoadingLayers, setIsLoadingLayers] = React.useState(false);
+  const [currentSelectedLayer, setCurrentSelectedLayer] = React.useState<{id: string, name: string, type: string} | null>(null);
+  
+  // 固定状態を管理する状態変数を追加
+  const [lockedLayers, setLockedLayers] = React.useState<Record<string, boolean>>({});
   
   // レイヤー選択ハンドラー
   const handleSelectLayerForPrompt = (promptId: string) => {
@@ -75,6 +88,18 @@ const PromptInput: React.FC<PromptInputProps> = ({
         } else {
           console.error('レイヤー一覧取得エラー:', message.error);
         }
+      } else if (message.type === 'selection-update') {
+        // 選択中のレイヤー情報を更新
+        if (message.selection && message.selection.length > 0) {
+          const selectedLayer = message.selection[0];
+          setCurrentSelectedLayer({
+            id: selectedLayer.id,
+            name: selectedLayer.name,
+            type: selectedLayer.type
+          });
+        } else {
+          setCurrentSelectedLayer(null);
+        }
       }
     };
     
@@ -83,22 +108,55 @@ const PromptInput: React.FC<PromptInputProps> = ({
   }, []);
   
   // レイヤー選択確定ハンドラー
-  const handleLayerSelect = (layerId: string) => {
-    if (!currentEditingPromptId) return;
-    
+  const handleLayerSelect = (promptId: string) => {
+    if (!currentSelectedLayer) {
+      console.warn('選択されているレイヤーがありません');
+      return;
+    }
+
     const updatedItems = promptItems.map(item => {
-      if (item.id === currentEditingPromptId) {
+      if (item.id === promptId) {
         return {
           ...item,
-          selectedLayerId: layerId
+          selectedLayerId: currentSelectedLayer.id,
+          title: currentSelectedLayer.name // レイヤー名を画面名として設定
+        };
+      }
+      return item;
+    });
+    
+    // レイヤーを固定状態にする
+    setLockedLayers(prev => ({
+      ...prev,
+      [promptId]: true
+    }));
+    
+    onPromptItemsChange(updatedItems);
+    setShowLayerSelector(false);
+    setCurrentEditingPromptId(null);
+  };
+  
+  // レイヤー選択解除ハンドラー
+  const handleLayerUnlock = (promptId: string) => {
+    // 固定状態を解除
+    setLockedLayers(prev => {
+      const updated = { ...prev };
+      delete updated[promptId];
+      return updated;
+    });
+    
+    // 選択を解除
+    const updatedItems = promptItems.map(item => {
+      if (item.id === promptId) {
+        return {
+          ...item,
+          selectedLayerId: undefined
         };
       }
       return item;
     });
     
     onPromptItemsChange(updatedItems);
-    setShowLayerSelector(false);
-    setCurrentEditingPromptId(null);
   };
   
   // レイヤー名取得ヘルパー
@@ -185,15 +243,18 @@ const PromptInput: React.FC<PromptInputProps> = ({
           'お問い合わせフォームをレスポンシブ対応でコーディングしてください。名前、メール、電話番号、お問い合わせ内容の入力欄を含みます。',
           'ニュースサイトのヘッダー部分をコーディングしてください。ロゴ、メインナビゲーション、検索バー、ログインボタンを含みます。'
         ];
-      case 'research':
-        return [
-          '研究のためのプロンプトを入力してください...',
-          '研究のためのプロンプトを入力してください...',
-          '研究のためのプロンプトを入力してください...'
-        ];
       default:
         return [];
     }
+  };
+
+  // レイヤー選択ボタンのクリックハンドラー
+  const handleLayerButtonClick = () => {
+    // Figmaの選択モードに切り替え
+    parent.postMessage(
+      { pluginMessage: { type: 'enter-selection-mode' } },
+      '*'
+    );
   };
 
   return (
@@ -262,19 +323,56 @@ const PromptInput: React.FC<PromptInputProps> = ({
             />
             <span className="text-sm text-gray-700">コーディング</span>
           </label>
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="radio"
-              name="templateType"
-              value="research"
-              checked={templateType === 'research'}
-              onChange={() => onTemplateTypeChange('research')}
-              disabled={disabled}
-              className="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-            />
-            <span className="text-sm text-gray-700">研究</span>
-          </label>
+
         </div>
+        
+        {/* コーディングモード時の画像処理設定 */}
+        {templateType === 'coding' && onIncludeImagesChange && (
+          <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200">
+            <h4 className="text-sm font-medium text-gray-700 mb-2">画像処理設定:</h4>
+            
+            <div className="flex gap-x-3 mb-2">
+              <div className="flex justify-center items-center">
+                <input
+                  type="checkbox"
+                  id="include-images"
+                  checked={includeImages}
+                  onChange={(e) => onIncludeImagesChange(e.target.checked)}
+                  disabled={disabled}
+                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label htmlFor="include-images" className="text-sm text-gray-700 cursor-pointer">
+                  画像を出力する
+                </label>
+              </div>
+            </div>
+            
+            {includeImages && useAdvancedImageDetection !== undefined && onAdvancedImageDetectionChange && (
+              <div className="flex gap-x-3 ml-6">
+                <div className="flex justify-center items-center">
+                  <input
+                    type="checkbox"
+                    id="use-advanced-detection"
+                    checked={useAdvancedImageDetection}
+                    onChange={(e) => onAdvancedImageDetectionChange(e.target.checked)}
+                    disabled={disabled}
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="use-advanced-detection" className="text-sm text-gray-700 cursor-pointer">
+                    AIによる高度な画像検出・分析を使用する
+                  </label>
+                  <p className="text-xs text-gray-500 mt-1">
+                    より正確に画像を検出し、適切なファイル名と形式を提案します
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         <button 
           type="button"
@@ -406,23 +504,64 @@ const PromptInput: React.FC<PromptInputProps> = ({
                   {/* レイヤー選択UI（コーディングモードのみ表示） */}
                   {templateType === 'coding' && (
                     <div className="mt-2">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectLayerForPrompt(item.id)}
-                        disabled={disabled}
-                        className="px-2 py-1 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 rounded transition-colors flex items-center gap-1"
-                      >
-                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                          <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
-                        </svg>
-                        <span>{item.selectedLayerId ? 'レイヤー選択済み' : 'レイヤーを選択'}</span>
-                      </button>
-                      {item.selectedLayerId && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          選択レイヤー: {getLayerNameById(item.selectedLayerId)}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {!lockedLayers[item.id] ? (
+                          // 未固定状態のUI
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleLayerButtonClick}
+                              disabled={disabled}
+                              className="px-2 py-1 text-xs bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300 rounded transition-colors flex items-center gap-1"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                                <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                              </svg>
+                              <span>レイヤーを選択</span>
+                            </button>
+                            
+                            {currentSelectedLayer && (
+                              <>
+                                <span className="text-xs text-gray-600">
+                                  現在の選択: {currentSelectedLayer.name}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleLayerSelect(item.id)}
+                                  disabled={disabled}
+                                  className="px-2 py-1 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
+                                >
+                                  決定
+                                </button>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          // 固定状態のUI
+                          <>
+                            <div className="flex items-center gap-2 px-2 py-1 bg-gray-50 border border-gray-200 rounded">
+                              <svg className="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                              </svg>
+                              <span className="text-xs text-gray-700">
+                                選択済み: {getLayerNameById(item.selectedLayerId || '')}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleLayerUnlock(item.id)}
+                              disabled={disabled}
+                              className="px-2 py-1 text-xs bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded transition-colors flex items-center gap-1"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                              </svg>
+                              <span>解除</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -441,19 +580,6 @@ const PromptInput: React.FC<PromptInputProps> = ({
           {disabled ? '生成中...' : (isBatchMode ? '一括生成開始' : 'HTML生成 & SVG変換')}
         </button>
       </div>
-
-      {/* レイヤー選択モーダル */}
-      <LayerSelector
-        isOpen={showLayerSelector}
-        onClose={() => {
-          setShowLayerSelector(false);
-          setCurrentEditingPromptId(null);
-        }}
-        onSelect={handleLayerSelect}
-        layers={availableLayers}
-        isLoading={isLoadingLayers}
-        selectedLayerId={currentEditingPromptId ? promptItems.find(item => item.id === currentEditingPromptId)?.selectedLayerId : undefined}
-      />
     </form>
   );
 };
@@ -471,8 +597,6 @@ const getPlaceholderByType = (type: TemplateType): string => {
       return 'ワイヤーフレーム/構成ラフの内容を説明してください...';
     case 'coding':
       return 'コーディングしたい要素や画面の詳細を説明してください...';
-    case 'research':
-      return '研究のためのプロンプトを入力してください...';
     default:
       return 'HTMLを生成するためのプロンプトを入力してください...';
   }

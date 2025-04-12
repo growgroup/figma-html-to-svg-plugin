@@ -155,12 +155,13 @@ export function processHtmlWithPrefixes(
 
 export function addPrefixesToCss(css: string, prefix: string): string {
   // CSSセレクターにプレフィックスを追加する
-  return css.replace(/\.([a-zA-Z0-9_-]+)/g, (match, className) => {
+  // セレクタの開始位置（行頭または } の後）から { までの範囲でのみマッチングを行う
+  return css.replace(/(^|\}|\,)\s*\.([a-zA-Z0-9_-]+)(?=[\s\,\{])/g, (match, separator, className) => {
     // すでにプレフィックスが付いている場合は処理しない
     if (className.startsWith(`${prefix}-`)) {
-      return match;
+      return `${separator}.${className}`;
     }
-    return `.${prefix}-${className}`;
+    return `${separator}.${prefix}-${className}`;
   });
 }
 
@@ -228,34 +229,68 @@ function mergeStyles(existing: string, newStyles: string): string {
 export async function createAndDownloadZip(
   files: Array<{ name: string, content: string }>,
   zipName: string,
-  images: Array<{id: string, name: string, data: string}> = []
+  images: Array<{id: string, name: string, data: string}> = [],
+  imageProposals: Array<{ id: string, proposedName: string, type: string }> = []
 ): Promise<void> {
   const zip = new JSZip();
   
   // テキストファイルをZIPに追加
   files.forEach(file => {
     console.log(`Adding file to ZIP: ${file.name}`);
+    // ディレクトリを含むパスをサポート
     zip.file(file.name, file.content);
   });
   
   // 画像ファイルをZIPに追加
   if (images.length > 0) {
     console.log(`Adding ${images.length} images to ZIP`);
-    // 画像フォルダを作成
-    const imgFolder = zip.folder('images');
-    if (imgFolder) {
-      images.forEach(image => {
-        try {
-          // Base64データからバイナリデータを抽出
-          const base64Parts = image.data.split(',');
-          const base64Content = base64Parts.length > 1 ? base64Parts[1] : base64Parts[0];
-          console.log(`Adding image to ZIP: ${image.name}`);
-          imgFolder.file(image.name, base64Content, { base64: true });
-        } catch (error) {
-          console.error(`Error adding image ${image.name} to ZIP:`, error);
+    
+    // ディレクトリ構造を判定（階層を含むパスが1つでもあれば複数階層と判断）
+    const hasMultipleDirectories = files.some(file => file.name.includes('/'));
+    
+    images.forEach(image => {
+      try {
+        // 名前の決定 (提案された名前があれば使用)
+        let imgName = image.name;
+        let imgType = 'png'; // デフォルト
+        
+        // 拡張子を除去して取得（すでに拡張子がある場合）
+        if (imgName.includes('.')) {
+          const parts = imgName.split('.');
+          imgType = parts.pop() || 'png';
+          imgName = parts.join('.');
         }
-      });
-    }
+        
+        // 提案情報があれば適用
+        const proposal = imageProposals.find(p => p.id === image.id);
+        if (proposal) {
+          imgName = proposal.proposedName;
+          imgType = proposal.type === 'jpeg' ? 'jpg' : proposal.type;
+        } else {
+          // 提案がない場合は名前をクリーンに
+          imgName = imgName.replace(/\s+/g, '-').toLowerCase();
+        }
+        
+        // Base64データからバイナリデータを抽出
+        const base64Parts = image.data.split(',');
+        const base64Content = base64Parts.length > 1 ? base64Parts[1] : base64Parts[0];
+        
+        // 保存パスを決定
+        let imgPath = '';
+        if (hasMultipleDirectories) {
+          // 複数階層の場合は共通フォルダに
+          imgPath = `common/images/${imgName}.${imgType}`;
+        } else {
+          // 単一階層の場合はシンプルなパス
+          imgPath = `images/${imgName}.${imgType}`;
+        }
+        
+        console.log(`Adding image to ZIP: ${imgPath}`);
+        zip.file(imgPath, base64Content, { base64: true });
+      } catch (error) {
+        console.error(`Error adding image ${image.name} to ZIP:`, error);
+      }
+    });
   } else {
     console.warn('No images to add to ZIP');
   }
@@ -275,8 +310,8 @@ export async function createAndDownloadZip(
     const url = URL.createObjectURL(content);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${zipName}.zip`;
-    console.log(`Downloading ${zipName}.zip`);
+    a.download = `${zipName}-${new Date().toISOString().slice(0, 10)}.zip`;
+    console.log(`Downloading ${zipName}-${new Date().toISOString().slice(0, 10)}.zip`);
     a.click();
     
     // クリーンアップ

@@ -42,7 +42,7 @@ export const DEFAULT_MODELS: AIModel[] = [
 ];
 
 // テンプレートタイプに基づいた特別な指示を返す関数
-function getSpecificInstructions(templateType: TemplateType): string {
+export function getSpecificInstructions(templateType: TemplateType): string {
   switch (templateType) {
     case 'webdesign':
       return `
@@ -121,30 +121,44 @@ function getSpecificInstructions(templateType: TemplateType): string {
       `;
     case 'coding':
       return `
-      このHTMLはコーディング用途です。Figmaで選択した要素のデザインを正確に再現するためのHTMLとCSSを生成します。以下の点に注意してください：
-      - FLOCSS（Foundation, Layout, Object）の設計手法に基づいてコードを構成してください
-        - Foundation: リセットCSS、ベースとなるスタイル定義
-        - Layout: サイト全体のレイアウトを司るスタイル
-        - Object: 再利用可能なコンポーネント（Component）、プロジェクト固有のスタイル（Project）、ユーティリティクラス（Utility）
-      - クラス名は接頭辞を利用して区別してください：
-        - Layout: "l-"（例: l-header, l-main, l-container）
-        - Component: "c-"（例: c-button, c-card, c-form）
-        - Project: "p-"（例: p-articles, p-news）※ 極力利用しないこと
-        - Utility: "u-"（例: u-clearfix, u-hidden）
-      - 状態は is-* でコーディングしてください。
-      - クラス名は、コーディングしようとしているデザインにあった命名をしてください。
-        - 例 : .c-block-about、c-card-cases-list など
-      - セマンティックなHTML5要素を適切に使用してください（header, footer, main, section, article, nav, aside など）
-      - CSSはHTMLファイル内にstyleタグで記述してください
-      - メディアクエリーは必要に応じて含めてください
-      - レスポンシブデザインに対応させる場合は、モバイルファーストの設計を心がけてください
-      - アクセシビリティに配慮したマークアップを行ってください（適切なaria属性、alt属性など）
-      - Figmaの選択要素のデザインを可能な限り正確に再現してください
-      - 外部ライブラリやフレームワークは使用せず、純粋なHTML/CSSで実装してください
-      - 画像箇所についてはすべてプレースホルダーとしてわかるようにしてください。
-        - https://placehold.jp/150x150.png ※ 幅や高さも合わせて
-      - 簡単なアイコンなどSVGで再現できるものはSVGをコーディングしてください。
-      - HTMLコメントやCSSコメントは一切不要です。
+FigmaデザインからのHTML/CSSコーディング指示
+# 目的:
+指定されたFigma上の選択要素のデザインを正確に再現する、プロダクション品質のHTMLおよびCSSコードを生成してください。
+# 出力形式:
+単一のHTMLファイルとして出力し、CSSはHTMLファイル内の<style>タグ内に記述してください。
+## ▼最重要ルール（厳守）====================
+- 技術スタック: 外部ライブラリやCSSフレームワーク（Tailwind CSS, Bootstrapなど）は一切使用せず、純粋なHTMLとCSSのみで実装してください。
+- CSS記述: CSSはHTMLファイル内の<style>タグに記述してください。
+- CSS変数: CSSカスタムプロパティ（変数）は絶対に使用しないでください。
+- ベースフォントサイズ: html 要素の font-size は 絶対に16px としてください。ただし、要素のスタイリングにはFigmaで指定された具体的な px 値を使用してください（rem/emへの自動変換は不要）。
+- コメント: 生成されるHTMLおよびCSSコードには、一切コメントを含めないでください。
+## ▼FLOCSS 設計ルール====================
+- 基本構造: FLOCSS（Foundation, Layout, Object）の設計思想に基づいてCSSを構成してください。<style> タグ内では、以下の順序で記述します。
+- /* Foundation */: リセットCSS、サイト全体の基本的なスタイル（body, typographyなど）。
+- /* Layout */: ヘッダー、フッター、メインコンテンツエリアなど、サイトの主要な骨格を定義するスタイル (l-* クラス）。
+- /* Object / Component */: 再利用可能なUI部品のスタイル (c-* クラス）。今回の主要なコーディング対象はここに属します。
+- /* Object / Project */: 特定のページやセクション固有のスタイル (p-* クラス）。原則として使用を避けてください。
+- /* Object / Utility */: 汎用的なヘルパー/ユーティリティクラス (u-* クラス）。
+### クラス命名規則:
+- 接頭辞: 必ず指定された接頭辞を使用してください (l-, c-, p-, u-)。
+- コンポーネント化: Figmaで選択された主要な要素群を単一のコンポーネント (c-*) として扱ってください。コンポーネント名はデザインの内容を反映した具体的な名前にしてください（例: c-feature-list, c-profile-card）。
+- Element: コンポーネント内部の構成要素は、BEMのElement形式 (__) を使用して命名してください（例: c-card__image, c-button__icon）。
+- Modifier (State): 要素の状態を示す場合は is-* の接頭辞を持つクラスを使用してください（例: is-active, is-hidden）。
+## ▼コーディング詳細ルール====================
+### HTML:
+- セマンティクス: HTML5のセマンティック要素（header, footer, main, section, article, nav, aside など）を適切に使用してください。
+- アクセシビリティ (A11y): alt属性（画像の内容を具体的に記述）、aria-*属性などを適切に使用し、アクセシビリティに配慮してください。
+### CSS:
+- デザイン再現: Figmaのデザイン（レイアウト、色、タイポグラフィ、スペーシング等）をピクセルパーフェクトに近いレベルで正確に再現してください。
+- レスポンシブ: 必要に応じてメディアクエリを使用し、レスポンシブデザインに対応してください。モバイルファースト（最小画面幅のスタイルを基本とし、大きな画面幅でスタイルを上書き/追加する）で設計してください。
+### 画像:
+= Figma上の画像要素は、すべて画像プレースホルダーとして表現してください。
+- プレースホルダーURLは https://placehold.jp/{幅}x{高さ}.png の形式を使用し、Figmaで指定された正確な幅と高さを指定してください。
+- パラメータなどで img-service01.jpg、icon-service01.png、bg-service01.jpg などの画像を出力する際の適切と思われる画像名がわかるように
+- alt属性には、その画像が何を表すかを具体的に記述してください（例: alt="ユーザーアバターのプレースホルダー"）。
+### アイコン:
+- 単純な形状のアイコン（矢印、閉じるボタンなど）で、SVGで容易に再現可能なものは、インラインSVG (<svg>...</svg>) を使用してコーディングしてください。画像プレースホルダーは使用しないでください。
+▲ルールここまで====================
       `;
     case 'research':
       return `

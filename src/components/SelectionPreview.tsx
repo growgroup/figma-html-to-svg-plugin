@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { SelectionInfo } from '../utils/types';
-
+import { getSpecificInstructions } from '../services/gemini';
 interface SelectionPreviewProps {
   selection: SelectionInfo[];
 }
@@ -12,12 +12,14 @@ const SelectionPreview: React.FC<SelectionPreviewProps> = ({ selection }) => {
   // JSONをコピーする関数
   const copySelectionToClipboard = () => {
     try {
-      console.log(selection)
-      const jsonString = JSON.stringify(selection, null, 2);
+      const instructions = getSpecificInstructions("coding");
+      let filterSelection: SelectionInfo[] = selection.map(({ imageData, ...rest }) => rest);
+
+      const jsonString = JSON.stringify(filterSelection, null, 2);
       
       // テキストエリアを作成し、JSONをセット
       const textArea = document.createElement('textarea');
-      textArea.value = jsonString;
+      textArea.value = instructions + '\n' + jsonString;
       
       // テキストエリアをDOMに追加（見えないように設定）
       textArea.style.position = 'fixed';

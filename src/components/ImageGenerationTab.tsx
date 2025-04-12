@@ -87,8 +87,8 @@ const ImageGenerationTab: React.FC<ImageGenerationTabProps> = ({
     <div className="space-y-6">
       {/* プロンプト入力 */}
       <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-        <h3 className="text-base font-medium text-gray-800 mb-3">
-          {showChatInterface ? '会話を続ける' : '画像生成プロンプト'}
+        <h3 className="text-sm font-bold text-gray-800 mb-3">
+          {showChatInterface ? '会話を続ける' : '画像生成プロンプト(β)'}
         </h3>
         <textarea
           value={imagePrompt}

@@ -3,9 +3,11 @@ import * as React from 'react';
 interface SVGPreviewProps {
   svg: string;
   html: string;
+  prompt?: string;
+  title?: string;
 }
 
-const SVGPreview: React.FC<SVGPreviewProps> = ({ svg, html }) => {
+const SVGPreview: React.FC<SVGPreviewProps> = ({ svg, html, prompt, title }) => {
   const [activeTab, setActiveTab] = React.useState<'svg' | 'html'>('svg');
 
   // ファイルをダウンロードする関数
@@ -25,14 +27,39 @@ const SVGPreview: React.FC<SVGPreviewProps> = ({ svg, html }) => {
     URL.revokeObjectURL(url);
   };
 
+  // ファイル名生成用のヘルパー関数
+  const generateFileName = (base: string, ext: string): string => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    let fileName = title ? `${title}-${timestamp}` : `generated-${timestamp}`;
+    
+    // プロンプトからファイル名を生成（プロンプトがある場合）
+    if (!title && prompt) {
+      // プロンプトの最初の数単語を使用
+      const words = prompt.split(/\s+/).slice(0, 3).join('-');
+      // 特殊文字を除去し、安全なファイル名に変換
+      const safeWords = words
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')  // 英数字、スペース、ハイフン以外を除去
+        .replace(/\s+/g, '-')      // スペースをハイフンに変換
+        .replace(/-+/g, '-')       // 連続するハイフンを1つに
+        .slice(0, 50);             // 長すぎる場合は切り詰め
+      
+      fileName = `${safeWords}-${timestamp}`;
+    }
+    
+    return `${fileName}.${ext}`;
+  };
+
   // SVGをダウンロード
   const handleDownloadSVG = () => {
-    downloadFile(svg, 'generated-svg.svg', 'image/svg+xml');
+    const fileName = generateFileName(title || 'svg', 'svg');
+    downloadFile(svg, fileName, 'image/svg+xml');
   };
 
   // HTMLをダウンロード
   const handleDownloadHTML = () => {
-    downloadFile(html, 'generated-html.html', 'text/html');
+    const fileName = generateFileName(title || 'html', 'html');
+    downloadFile(html, fileName, 'text/html');
   };
 
   return (

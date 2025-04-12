@@ -13,9 +13,10 @@ import { DesignTokens, SelectionInfo, CodeGenerationOptions } from '../utils/typ
 import { createAndDownloadZip, processHtmlWithPrefixes, extractImagesFromSelection, updateHtmlWithImagePaths, mergeCssFiles } from '../utils/codeHelper';
 import JSZip from 'jszip';
 import ResearchTab from './ResearchTab';
+import OthersTab from './OthersTab';
 
 // メインタブの状態型を拡張
-type MainTabType = 'generation' | 'tokens' | 'settings' | 'image-generation' | 'research';
+type MainTabType = 'generation' | 'tokens' | 'settings' | 'image-generation' | 'research' | 'others';
 
 const App: React.FC = () => {
   const [designTokens, setDesignTokens] = React.useState<DesignTokens | null>(null);
@@ -64,6 +65,20 @@ const App: React.FC = () => {
   const [addCodePrefix, setAddCodePrefix] = React.useState<boolean>(true);
   const [useBEMNotation, setUseBEMNotation] = React.useState<boolean>(true);
   const [mergeCssInBatch, setMergeCssInBatch] = React.useState<boolean>(true);
+  
+  // 高度な画像検出・分析のための状態変数
+  const [useAdvancedImageDetection, setUseAdvancedImageDetection] = React.useState<boolean>(false);
+  const [detectedImages, setDetectedImages] = React.useState<Array<{
+    id: string,
+    name: string,
+    type: 'svg' | 'jpeg' | 'png',
+    proposedName?: string,
+    exportScale?: number,
+    reason: string,
+    data?: string,
+    size?: { width: number, height: number }
+  }>>([]);
+  const [isImageDetecting, setIsImageDetecting] = React.useState(false);
   
   // 実際に使用するモデルID (カスタムか標準か)
   const actualModelId = showCustomModelInput ? customModelId : selectedModelId;
@@ -180,6 +195,11 @@ const App: React.FC = () => {
         !includeImages &&
         !apiKey &&
         !basePrompt &&
+        !directCodeOutput &&
+        !addCodePrefix &&
+        codePrefix === 'component' &&
+        !useBEMNotation &&
+        !mergeCssInBatch &&
         autoSizeEnabled) {
       return;
     }
@@ -196,10 +216,37 @@ const App: React.FC = () => {
         includeChildren,
         includeImages,
         basePrompt,
-        autoSizeEnabled
+        autoSizeEnabled,
+        // コーディング設定を追加
+        directCodeOutput,
+        addCodePrefix,
+        codePrefix,
+        useBEMNotation,
+        mergeCssInBatch,
+        // 画像検出設定を追加
+        useAdvancedImageDetection
       }
     }, '*');
-  }, [selectedModelId, customModelId, showCustomModelInput, generateWidth, generateHeight, includeChildren, includeImages, apiKey, basePrompt, autoSizeEnabled]);
+  }, [
+    selectedModelId, 
+    customModelId, 
+    showCustomModelInput, 
+    generateWidth, 
+    generateHeight, 
+    includeChildren, 
+    includeImages, 
+    apiKey, 
+    basePrompt, 
+    autoSizeEnabled,
+    // コーディング設定の依存関係を追加
+    directCodeOutput,
+    addCodePrefix,
+    codePrefix,
+    useBEMNotation,
+    mergeCssInBatch,
+    // 画像検出設定を追加
+    useAdvancedImageDetection
+  ]);
 
   // Figmaからのメッセージをリッスン
   React.useEffect(() => {
@@ -251,8 +298,16 @@ const App: React.FC = () => {
         setGenerateHeight(settings.generateHeight);
         setIncludeChildren(settings.includeChildren);
         setIncludeImages(settings.includeImages);
-        setBasePrompt(settings.basePrompt || ''); // 新しい設定項目
-        setAutoSizeEnabled(settings.autoSizeEnabled !== undefined ? settings.autoSizeEnabled : true); // 新しい設定項目
+        setBasePrompt(settings.basePrompt || '');
+        setAutoSizeEnabled(settings.autoSizeEnabled !== undefined ? settings.autoSizeEnabled : true);
+        // コーディング設定を追加
+        setDirectCodeOutput(settings.directCodeOutput || false);
+        setAddCodePrefix(settings.addCodePrefix !== undefined ? settings.addCodePrefix : true);
+        setCodePrefix(settings.codePrefix || 'component');
+        setUseBEMNotation(settings.useBEMNotation || false);
+        setMergeCssInBatch(settings.mergeCssInBatch || true);
+        // 画像検出設定を追加
+        setUseAdvancedImageDetection(settings.useAdvancedImageDetection || false);
       } else if (message.type === 'page-data-result') {
         // ページデータを受け取ったら自動生成処理を実行
         generateBasePromptFromPageData(message.pageData);
@@ -260,6 +315,23 @@ const App: React.FC = () => {
         setCodingPrompt(message.codingPrompt || 'FLOCSS');
       } else if (message.type === 'coding-prompt-result') {
         setCodingPrompt(message.codingPrompt || 'FLOCSS');
+      } else if (message.type === 'detect-image-nodes-result') {
+        // 画像ノード検出結果の処理
+        if (message.success) {
+          console.log(`検出された画像ノード: ${message.imageNodes?.length || 0}件`);
+          // この情報は通常detectAndAnalyzeImages関数内で処理されるため、ここでは特に何もしない
+        } else {
+          setError(`画像ノード検出エラー: ${message.error}`);
+          setIsImageDetecting(false);
+        }
+      } else if (message.type === 'export-images-result') {
+        // 画像エクスポート結果の処理
+        if (message.success) {
+          console.log(`エクスポートされた画像: ${message.images?.length || 0}件`);
+          // この情報は通常exportDetectedImages関数内で処理されるため、ここでは特に何もしない
+        } else {
+          setError(`画像エクスポートエラー: ${message.error}`);
+        }
       }
     };
   }, [apiKey, actualModelId, designTokens, isBatchGenerating, currentBatchIndex, promptItems.length]); // 依存配列に必要な変数を追加
@@ -375,6 +447,176 @@ const App: React.FC = () => {
     }
   };
 
+  // 画像ノードを検出・分析する関数
+  const detectAndAnalyzeImages = async (selectedElements: SelectionInfo[]) => {
+    if (selectedElements.length === 0) {
+      setError('レイヤーが選択されていません');
+      return [];
+    }
+    
+    if (!apiKey) {
+      setError('APIキーが設定されていません');
+      return [];
+    }
+    
+    setIsImageDetecting(true);
+    setError('');
+    setProgress({ stage: '画像ノードを検出中...', percentage: 20 });
+    
+    try {
+      // インポートした関数を使用
+      const { findImageNodesInSelection, analyzeImagesWithGemini } = await import('../utils/imageUtils');
+      
+      // 画像ノード検出
+      let imageNodes = await findImageNodesInSelection(selectedElements);
+      
+      if (imageNodes.length === 0) {
+        console.log('画像ノードが見つかりませんでした。選択レイヤー情報をAIに分析させます');
+        imageNodes = selectedElements.map(item => ({
+          id: item.id,
+          name: item.name,
+          type: 'LAYER',
+          reason: '選択レイヤーからの解析対象'
+        }));
+      }
+      
+      setProgress({ stage: 'AIで画像を分析中...', percentage: 50 });
+      
+      // 選択要素の画像データを取得
+      const selectionImage = selectedElements[0]?.imageData || null;
+      
+      // Gemini APIで分析
+      const analyzedImages = await analyzeImagesWithGemini(
+        apiKey,
+        selectionImage,
+        imageNodes,
+        selectedElements
+      );
+      
+      // 結果のマージ処理
+      const aiNodeIds = new Set(analyzedImages.map(img => img.id));
+      const nodeResults: Array<{
+        id: string,
+        name: string,
+        type: 'svg' | 'jpeg' | 'png',
+        proposedName?: string,
+        exportScale?: number,
+        reason: string,
+        size?: { width: number, height: number }
+      }> = [];
+      
+      // AIからの提案をすべて追加
+      analyzedImages.forEach(analyzed => {
+        nodeResults.push({
+          id: analyzed.id,
+          name: `提案: ${analyzed.proposedName}`,
+          type: analyzed.type,
+          proposedName: analyzed.proposedName,
+          exportScale: analyzed.exportScale,
+          reason: analyzed.reason
+        });
+      });
+      
+      // AIが処理しなかった検出ノードも追加
+      imageNodes.forEach(node => {
+        if (!aiNodeIds.has(node.id)) {
+          nodeResults.push({
+            id: node.id,
+            name: node.name,
+            type: 'png',
+            reason: 'AI分析未実施'
+          });
+        }
+      });
+      
+      setDetectedImages(nodeResults);
+      setProgress({ stage: '画像検出完了', percentage: 100 });
+      return nodeResults;
+    } catch (err) {
+      setError(`画像検出エラー: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    } finally {
+      setIsImageDetecting(false);
+    }
+  };
+  
+  // 検出した画像ノードをエクスポートする処理
+  const exportDetectedImages = async (detectedImages: any[]) => {
+    if (detectedImages.length === 0) {
+      setError('エクスポートする画像がありません');
+      return [];
+    }
+    
+    setProgress({ stage: '画像をエクスポート中...', percentage: 30 });
+    
+    try {
+      // 画像ノードのIDを取得
+      const nodeIds = detectedImages
+        .filter(image => image.id && image.id.trim() !== '')
+        .map(image => image.id);
+      
+      // ノード情報をマップ化
+      const nodeInfoMap: Record<string, any> = {};
+      
+      // 各IDに対して詳細な設定を保存
+      detectedImages.forEach(image => {
+        if (!image.id || image.id.trim() === '') return;
+        
+        const exportType = image.type === 'jpeg' ? 'jpg' : image.type;
+        const proposedName = image.proposedName || image.name.replace(/\s+/g, '-').toLowerCase();
+        
+        nodeInfoMap[image.id] = {
+          id: image.id,
+          name: image.name,
+          type: image.type, 
+          exportType: exportType,
+          proposedName: proposedName,
+          exportScale: image.exportScale || 1,
+          exportIndividual: true
+        };
+      });
+      
+      // 画像データを取得
+      return await new Promise<Array<{ id: string, name: string, data: string }>>((resolve, reject) => {
+        parent.postMessage(
+          { 
+            pluginMessage: { 
+              type: 'export-elements-as-images', 
+              nodeIds,
+              nodeInfoMap,
+              prioritizeIndividualNodes: true
+            }
+          },
+          '*'
+        );
+        
+        const messageHandler = (event: MessageEvent) => {
+          const message = event.data.pluginMessage;
+          if (!message) return;
+          
+          if (message.type === 'export-images-result') {
+            window.removeEventListener('message', messageHandler);
+            
+            if (message.success) {
+              resolve(message.images || []);
+            } else {
+              reject(new Error(message.error || 'Failed to export images'));
+            }
+          }
+        };
+        
+        window.addEventListener('message', messageHandler);
+        
+        setTimeout(() => {
+          window.removeEventListener('message', messageHandler);
+          reject(new Error('画像エクスポートのタイムアウト'));
+        }, 20000);
+      });
+    } catch (err) {
+      setError(`画像エクスポートエラー: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  };
   
   // 幅の入力変更ハンドラー
   const handleWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -514,9 +756,9 @@ const App: React.FC = () => {
       );
       setHtmlResult(htmlContent);
       
-      // この部分を条件分岐で変更
-      if (templateType === 'coding' && directCodeOutput) {
-        // コーディングモード + 直接出力の場合
+      // テンプレートタイプが'coding'の場合は常にHTML/CSSを直接出力
+      if (templateType === 'coding') {
+        // コーディングモードの場合は常にHTML/CSSを直接出力
         setProgress({ stage: 'HTML/CSSを処理中...', percentage: 60 });
         
         // プレフィックス設定
@@ -532,23 +774,41 @@ const App: React.FC = () => {
         
         let processedHtml = html;
         let imageAssets: Array<{id: string, name: string, data: string}> = [];
+        let imageProposals: Array<{id: string, proposedName: string, type: string}> = [];
         
-        // 画像アセットの抽出が必要な場合
+        // 画像処理の変更: 高度な画像検出を使用するかどうか
         if (includeImages && currentSelection.length > 0) {
           setProgress({ stage: '画像アセットを処理中...', percentage: 70 });
           
           try {
-            console.log(`Extracting images for single generation...`);
-            // 選択要素から画像をエクスポート
-            const imageAssets = await extractImagesFromSelection(currentSelection);
-            
-            console.log(`Extracted ${imageAssets.length} images`);
-            
-            // HTMLのimg要素のsrc属性を更新
-            if (imageAssets.length > 0) {
-              processedHtml = updateHtmlWithImagePaths(html, imageAssets, false);
+            if (useAdvancedImageDetection) {
+              // 画像ユーティリティを動的インポート
+              const { updateHtmlWithAdvancedImagePaths } = await import('../utils/imageUtils');
+              
+              // 高度な画像検出・分析を使用
+              const detectedImgs = await detectAndAnalyzeImages(currentSelection);
+              if (detectedImgs.length > 0) {
+                const exportedImages = await exportDetectedImages(detectedImgs);
+                imageAssets = exportedImages;
+                
+                // 画像提案情報を作成
+                imageProposals = detectedImgs.map(img => ({
+                  id: img.id,
+                  proposedName: img.proposedName || img.name.replace(/\s+/g, '-').toLowerCase(),
+                  type: img.type
+                }));
+                
+                // HTMLの更新
+                if (exportedImages.length > 0) {
+                  processedHtml = updateHtmlWithAdvancedImagePaths(html, exportedImages, detectedImgs, false);
+                }
+              }
             } else {
-              console.warn('No images found in selection');
+              // 通常の画像抽出を使用
+              imageAssets = await extractImagesFromSelection(currentSelection);
+              if (imageAssets.length > 0) {
+                processedHtml = updateHtmlWithImagePaths(html, imageAssets, false);
+              }
             }
           } catch (imgError) {
             console.error('Image processing error:', imgError);
@@ -562,8 +822,8 @@ const App: React.FC = () => {
           { name: 'style.css', content: css }
         ];
         
-        // ダウンロード処理（画像を含める）
-        await createAndDownloadZip(files, 'generated-code', imageAssets);
+        // ダウンロード処理（画像と提案情報を含める）
+        await createAndDownloadZip(files, 'generated-code', imageAssets, imageProposals);
         
         setProgress({ stage: 'コード生成完了', percentage: 100 });
         setTimeout(() => setIsLoading(false), 1000);
@@ -730,6 +990,7 @@ const App: React.FC = () => {
       console.log('Direct code output:', directCodeOutput);
       console.log('Merge CSS in batch:', mergeCssInBatch);
       console.log('Include images:', includeImages);
+      console.log('Advanced image detection:', useAdvancedImageDetection);
       
       // プログレス表示を更新
       setProgress({ 
@@ -871,8 +1132,8 @@ const App: React.FC = () => {
         templateType === 'coding' ? codingPrompt : undefined // コーディングモードの場合、カスタムプロンプトを渡す
       );
       
-      // コーディングモード + 直接出力の場合の処理
-      if (templateType === 'coding' && directCodeOutput) {
+      // コーディングモードの場合は常にHTML/CSS出力処理を行う
+      if (templateType === 'coding') {
         setProgress({ 
           stage: `HTML/CSSを処理中... (${currentBatchIndex + 1}/${promptItems.length})`, 
           percentage: 60 
@@ -897,40 +1158,83 @@ const App: React.FC = () => {
         
         let processedHtml = html;
         let imageAssets: Array<{id: string, name: string, data: string}> = [];
+        let imageProposals: Array<{id: string, proposedName: string, type: string}> = [];
         
-        // 画像アセットの抽出が必要な場合（バッチ処理用）
+        // 画像処理の条件分岐を追加
         if (includeImages && currentSelection.length > 0) {
           try {
-            console.log(`Extracting images for prompt "${currentItem.title}"...`);
-            // 選択要素から画像をエクスポート
-            const currentImageAssets = await extractImagesFromSelection(currentSelection);
-            
-            console.log(`Extracted ${currentImageAssets.length} images for prompt "${currentItem.title}"`);
-            
-            // 画像アセットを変数に保存
-            imageAssets = currentImageAssets;
-            
-            // HTMLのimg要素のsrc属性を更新 - 共通フォルダフラグを追加
-            if (currentImageAssets.length > 0) {
-              processedHtml = updateHtmlWithImagePaths(html, currentImageAssets, mergeCssInBatch);
+            if (useAdvancedImageDetection) {
+              // 画像ユーティリティを動的インポート
+              const { updateHtmlWithAdvancedImagePaths } = await import('../utils/imageUtils');
               
-              // 画像アセットを累積
-              setBatchImageAssets(prev => {
-                // 重複を避けるため、既に同じIDの画像がある場合は置き換える
-                const newAssets = [...prev];
-                currentImageAssets.forEach(asset => {
-                  const existingIndex = newAssets.findIndex(a => a.id === asset.id);
-                  if (existingIndex >= 0) {
-                    newAssets[existingIndex] = asset;
-                  } else {
-                    newAssets.push(asset);
-                  }
-                });
-                console.log(`Updated batch image assets, now have ${newAssets.length} images in total`);
-                return newAssets;
-              });
+              console.log(`Using advanced image detection for prompt "${currentItem.title}"`);
+              // 高度な画像検出・分析を使用
+              const detectedImgs = await detectAndAnalyzeImages(currentSelection);
+              if (detectedImgs.length > 0) {
+                const exportedImages = await exportDetectedImages(detectedImgs);
+                imageAssets = exportedImages;
+                
+                // 画像提案情報を作成
+                imageProposals = detectedImgs.map(img => ({
+                  id: img.id,
+                  proposedName: img.proposedName || img.name.replace(/\s+/g, '-').toLowerCase(),
+                  type: img.type
+                }));
+                
+                // HTMLの更新
+                if (exportedImages.length > 0) {
+                  processedHtml = updateHtmlWithAdvancedImagePaths(html, exportedImages, detectedImgs, mergeCssInBatch);
+                  
+                  // 画像アセットを累積
+                  setBatchImageAssets(prev => {
+                    // 重複を避けるため既存のIDをチェック
+                    const newAssets = [...prev];
+                    exportedImages.forEach(asset => {
+                      const existingIndex = newAssets.findIndex(a => a.id === asset.id);
+                      if (existingIndex >= 0) {
+                        newAssets[existingIndex] = asset;
+                      } else {
+                        newAssets.push(asset);
+                      }
+                    });
+                    console.log(`Updated batch image assets, now have ${newAssets.length} images in total`);
+                    return newAssets;
+                  });
+                }
+              }
             } else {
-              console.warn(`No images found in selection for prompt "${currentItem.title}"`);
+              // 通常の画像抽出処理を使用
+              console.log(`Extracting images for prompt "${currentItem.title}"...`);
+              // 選択要素から画像をエクスポート
+              const currentImageAssets = await extractImagesFromSelection(currentSelection);
+              
+              console.log(`Extracted ${currentImageAssets.length} images for prompt "${currentItem.title}"`);
+              
+              // 画像アセットを変数に保存
+              imageAssets = currentImageAssets;
+              
+              // HTMLのimg要素のsrc属性を更新 - 共通フォルダフラグを追加
+              if (currentImageAssets.length > 0) {
+                processedHtml = updateHtmlWithImagePaths(html, currentImageAssets, mergeCssInBatch);
+                
+                // 画像アセットを累積
+                setBatchImageAssets(prev => {
+                  // 重複を避けるため、既に同じIDの画像がある場合は置き換える
+                  const newAssets = [...prev];
+                  currentImageAssets.forEach(asset => {
+                    const existingIndex = newAssets.findIndex(a => a.id === asset.id);
+                    if (existingIndex >= 0) {
+                      newAssets[existingIndex] = asset;
+                    } else {
+                      newAssets.push(asset);
+                    }
+                  });
+                  console.log(`Updated batch image assets, now have ${newAssets.length} images in total`);
+                  return newAssets;
+                });
+              } else {
+                console.warn(`No images found in selection for prompt "${currentItem.title}"`);
+              }
             }
           } catch (imgError) {
             console.error(`Image processing error for prompt "${currentItem.title}":`, imgError);
@@ -997,8 +1301,17 @@ const App: React.FC = () => {
           console.log(`Total files to be added: ${batchFiles.length}`);
           console.log(`Total batch images to be added: ${batchImageAssets.length}`);
           
+          // 画像提案情報を蓄積
+          const allImageProposals = promptItems.flatMap((item, idx) => {
+            const genItem = currentGeneratedItems.find(g => g.id === item.id);
+            if (genItem && genItem.id === currentItem.id) {
+              return imageProposals;
+            }
+            return [];
+          });
+          
           // 蓄積した画像アセットを使用してZIPを作成
-          await createAndDownloadZip(batchFiles, 'generated-code-batch', batchImageAssets);
+          await createAndDownloadZip(batchFiles, 'generated-code-batch', batchImageAssets, allImageProposals);
           
           setProgress({ stage: '一括生成完了', percentage: 100 });
           setTimeout(() => {
@@ -1203,6 +1516,10 @@ const App: React.FC = () => {
             onBatchGenerate={handleStartBatchGeneration}
             isBatchMode={isBatchMode}
             onBatchModeChange={setIsBatchMode}
+            useAdvancedImageDetection={useAdvancedImageDetection}
+            onAdvancedImageDetectionChange={setUseAdvancedImageDetection}
+            includeImages={includeImages}
+            onIncludeImagesChange={(value) => handleSelectionSettingsChange('images', value)}
           />
         </div>
         
@@ -1293,7 +1610,14 @@ const App: React.FC = () => {
         {/* 結果プレビュー */}
         {svgResult && (
           <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-            <SVGPreview svg={svgResult} html={htmlResult} />
+            <SVGPreview 
+              svg={svgResult} 
+              html={htmlResult} 
+              prompt={prompt}
+              title={isBatchMode && currentBatchIndex < promptItems.length ? 
+                promptItems[currentBatchIndex].title : 
+                undefined}
+            />
             {svgSize.width > 0 && svgSize.height > 0 && (
               <div className="text-xs text-gray-500 mt-2">
                 SVGサイズ: {svgSize.width} × {svgSize.height} px
@@ -1305,14 +1629,7 @@ const App: React.FC = () => {
     );
   };
   
-  // デザイントークンタブのコンテンツをレンダリングする関数
-  const renderTokensTab = () => {
-    return (
-      <div>
-        <TokenDisplay tokens={designTokens} />
-      </div>
-    );
-  };
+
   
   // 設定タブのコンテンツをレンダリングする関数
   const renderSettingsTab = () => {
@@ -1362,6 +1679,22 @@ const App: React.FC = () => {
         includeChildren={includeChildren}
         includeImages={includeImages}
       />
+    );
+  };
+
+  // その他タブのコンテンツをレンダリングする関数
+  const renderOthersTab = () => {
+    return (
+      <div>
+        <OthersTab
+          apiKey={apiKey}
+          selection={selection}
+          includeImages={includeImages}
+          includeChildren={includeChildren}
+          handleSelectionSettingsChange={handleSelectionSettingsChange}
+        />
+        <TokenDisplay tokens={designTokens} />
+      </div>
     );
   };
 
@@ -1435,10 +1768,10 @@ const App: React.FC = () => {
             リサーチ
           </button>
           <button 
-              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'tokens' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
-            onClick={() => setActiveMainTab('tokens')}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'others' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
+            onClick={() => setActiveMainTab('others')}
           >
-            デザイントークン
+            その他
           </button>
           <button 
               className={`px-3 py-2 text-xs font-medium transition-colors ${activeMainTab === 'settings' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:text-gray-800'}`}
@@ -1454,12 +1787,13 @@ const App: React.FC = () => {
       <div>
         {activeMainTab === 'generation' && renderGenerationTab()}
         {activeMainTab === 'image-generation' && renderImageGenerationTab()}
-        {activeMainTab === 'tokens' && renderTokensTab()}
         {activeMainTab === 'settings' && renderSettingsTab()}
         {activeMainTab === 'research' && renderResearchTab()}
+        {activeMainTab === 'others' && renderOthersTab()}
       </div>
     </div>
   );
 };
 
-export default App; 
+
+export default App;

@@ -11,8 +11,8 @@ const TokenDisplay: React.FC<TokenDisplayProps> = ({ tokens }) => {
 
   if (!tokens) {
     return (
-      <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-        <h3 className="text-base font-medium text-gray-800 mb-2">デザイントークン</h3>
+      <div className="bg-white mt-2 rounded-lg shadow-sm p-4 border border-gray-200">
+        <h3 className="text-sm font-bold text-gray-800 mb-2">デザイントークン</h3>
         <p className="text-sm text-gray-500 italic">デザイントークンが見つかりません</p>
       </div>
     );
@@ -23,17 +23,17 @@ const TokenDisplay: React.FC<TokenDisplayProps> = ({ tokens }) => {
 
   if (!hasTokens) {
     return (
-      <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
-        <h3 className="text-base font-medium text-gray-800 mb-2">デザイントークン</h3>
+      <div className="bg-white mt-2 rounded-lg shadow-sm p-4 border border-gray-200">
+        <h3 className="text-sm font-bold text-gray-800 mb-2">デザイントークン</h3>
         <p className="text-sm text-gray-500 italic">デザイントークンが見つかりません</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm p-4 border border-gray-200">
+    <div className="bg-white mt-2 rounded-lg shadow-sm p-4 border border-gray-200">
       <div className="flex justify-between items-center mb-3">
-        <h3 className="text-base font-medium text-gray-800">デザイントークン</h3>
+        <h3 className="text-sm font-bold text-gray-800">デザイントークン</h3>
         <button 
           className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-md transition-colors"
           onClick={() => setIsExpanded(!isExpanded)}

@@ -13,13 +13,13 @@ export const DEFAULT_MODELS: AIModel[] = [
     id: 'gemini-2-5-pro', 
     name: 'Google Gemini 2.5 Pro',
     provider: 'gemini',
-    apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent'
+    apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent'
   },
   { 
     id: 'gemini-2-0-flash', 
     name: 'Google Gemini 2.0 Flash',
     provider: 'gemini',
-    apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+    apiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
   },
   { 
     id: 'google/gemini-2.5-pro-exp-03-25:free', 
